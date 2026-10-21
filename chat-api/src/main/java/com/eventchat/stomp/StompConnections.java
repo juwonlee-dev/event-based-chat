@@ -1,6 +1,7 @@
 package com.eventchat.stomp;
 
 import com.eventchat.realtime.RealtimeBus;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -17,6 +18,7 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
  * <ul>
  *   <li>사용자별 동시 연결 수 제한(노드 메모리로 센다)</li>
  *   <li>접근 토큰 만료 시각에 ERROR AUTH_TOKEN_EXPIRED로 닫기</li>
+ *   <li>강제 종료(AUTH_REVOKED)</li>
  * </ul>
  */
 @Component
@@ -68,6 +70,13 @@ public class StompConnections {
     UUID unsubscribed(String simpSessionId, String subscriptionId) {
         Connection connection = connections.get(simpSessionId);
         return connection == null ? null : connection.subscriptions().remove(subscriptionId);
+    }
+
+    /** 이 사용자의 이 노드 연결을 모두 닫는다(전체 로그아웃·계정 정지). */
+    public int closeUser(UUID userId, String code, String detail) {
+        Set<String> sessions = byUser.getOrDefault(userId, Set.of());
+        List.copyOf(sessions).forEach(id -> delivery.closeWithError(id, code, detail));
+        return sessions.size();
     }
 
     @EventListener

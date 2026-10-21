@@ -2,6 +2,7 @@ package com.eventchat.security;
 
 import com.eventchat.persistence.user.AppUser;
 import com.eventchat.persistence.user.AppUserRepository;
+import com.eventchat.realtime.RealtimeControl;
 import com.eventchat.security.RefreshTokenService.RotationResult;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
@@ -38,18 +39,20 @@ public class AuthController {
     private final RefreshTokenService refreshTokens;
     private final RateLimiter rateLimiter;
     private final AuditLog auditLog;
+    private final RealtimeControl realtimeControl;
     /** 없는 사용자도 같은 비용으로 비교해, 응답 시간으로 존재 여부가 드러나지 않게 한다. */
     private final String dummyPasswordHash;
 
     public AuthController(AppUserRepository users, PasswordEncoder passwordEncoder,
             AccessTokenService accessTokens, RefreshTokenService refreshTokens,
-            RateLimiter rateLimiter, AuditLog auditLog) {
+            RateLimiter rateLimiter, AuditLog auditLog, RealtimeControl realtimeControl) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
         this.accessTokens = accessTokens;
         this.refreshTokens = refreshTokens;
         this.rateLimiter = rateLimiter;
         this.auditLog = auditLog;
+        this.realtimeControl = realtimeControl;
         this.dummyPasswordHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
@@ -103,6 +106,8 @@ public class AuthController {
         UUID userId = UUID.fromString(jwt.getSubject());
         if (request.all()) {
             refreshTokens.revokeAll(userId);
+            // 실시간 연결도 모든 노드에서 바로 끊는다.
+            realtimeControl.revokeUser(userId);
         } else if (request.refreshToken() != null) {
             refreshTokens.revokeFamilyOf(request.refreshToken(), userId);
         }

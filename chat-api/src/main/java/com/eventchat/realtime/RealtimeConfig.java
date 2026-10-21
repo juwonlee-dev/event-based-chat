@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.listener.ChannelTopic;
 import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
@@ -19,12 +20,13 @@ public class RealtimeConfig {
 
     @Bean
     RedisMessageListenerContainer realtimeListenerContainer(RedisConnectionFactory connectionFactory,
-            PatternRealtimeBus bus) {
+            PatternRealtimeBus bus, RealtimeControl control) {
         RedisMessageListenerContainer container = new RedisMessageListenerContainer();
         container.setConnectionFactory(connectionFactory);
         // 기본 실행기는 메시지마다 새 스레드를 써서 같은 채널 안의 순서가 섞인다.
         container.setTaskExecutor(new SyncTaskExecutor());
         container.addMessageListener(bus, new PatternTopic(PatternRealtimeBus.PATTERN));
+        container.addMessageListener(control, new ChannelTopic(RealtimeControl.CHANNEL));
         return container;
     }
 
