@@ -84,6 +84,12 @@ chat:
   realtime:
     health-check-interval: 5s
     degraded-poll-interval: 5s
+  presence:
+    grace: 15s
+    node-heartbeat: 5s
+    node-lease-ttl: 15s
+    sweep-interval: 2s
+    reconcile-interval: 60s
   jwt:
     issuer: event-based-chat
     access-ttl: 30m

@@ -48,6 +48,7 @@ services:
         "--user", "${REDIS_USER:?}", "on", ">${REDIS_PASSWORD:?}",
         "~ws:*", "~pr:*", "~rl:*", "&chat:s:*", "&chat:ctl",
         "-@all", "+@read", "+@write", "+@pubsub", "+@scripting", "+@connection", "-@dangerous", "+ping", "+info",
+        "+time",
         "--user", "healthcheck", "on", "nopass", "-@all", "+ping",
       ]
     ports:

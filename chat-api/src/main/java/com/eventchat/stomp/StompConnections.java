@@ -1,5 +1,7 @@
 package com.eventchat.stomp;
 
+import com.eventchat.presence.DisconnectReason;
+import com.eventchat.presence.PresenceTracker;
 import com.eventchat.realtime.RealtimeBus;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,7 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
  *   <li>사용자별 동시 연결 수 제한(노드 메모리로 센다)</li>
  *   <li>접근 토큰 만료 시각에 ERROR AUTH_TOKEN_EXPIRED로 닫기</li>
  *   <li>강제 종료(AUTH_REVOKED), 종료 시 드레이닝</li>
+ *   <li>연결 상태(presence) 등록·해제</li>
  * </ul>
  */
 @Component
@@ -32,17 +35,22 @@ public class StompConnections {
     private final Map<UUID, Set<String>> byUser = new ConcurrentHashMap<>();
     /** 드레이닝 때 1012로 닫으려고 원래 WebSocket 세션을 따로 들고 있는다. */
     private final Map<String, WebSocketSession> sockets = new ConcurrentHashMap<>();
+    /** 브로커가 heart-beat 누락으로 닫은 연결. 끊긴 이유를 구분하려고 표시해 둔다. */
+    private final Set<String> heartbeatTimeouts = ConcurrentHashMap.newKeySet();
     private final StompProperties properties;
     private final TaskScheduler scheduler;
     private final StompDelivery delivery;
     private final RealtimeBus bus;
+    private final PresenceTracker presence;
 
     public StompConnections(StompProperties properties,
-            @Qualifier("stompTaskScheduler") TaskScheduler stompTaskScheduler, StompDelivery delivery, RealtimeBus bus) {
+            @Qualifier("stompTaskScheduler") TaskScheduler stompTaskScheduler, StompDelivery delivery, RealtimeBus bus,
+            PresenceTracker presence) {
         this.properties = properties;
         this.scheduler = stompTaskScheduler;
         this.delivery = delivery;
         this.bus = bus;
+        this.presence = presence;
     }
 
     /** CONNECT 수락. 사용자의 연결이 이미 상한이면 false. */
@@ -58,12 +66,21 @@ public class StompConnections {
         if (!accepted[0]) {
             return false;
         }
+        presence.connected(principal.userId(), simpSessionId);
         // 토큰이 만료되면 연결을 닫는다. 클라이언트는 그 전에 갱신한 토큰으로 다시 연결한다.
         ScheduledFuture<?> expiry = scheduler.schedule(
                 () -> delivery.closeWithError(simpSessionId, "AUTH_TOKEN_EXPIRED", "접근 토큰이 만료되었습니다."),
                 principal.tokenExpiresAt());
         connections.put(simpSessionId, new Connection(principal, expiry, new ConcurrentHashMap<>()));
+        if (!sockets.containsKey(simpSessionId)) {
+            // CONNECT를 처리하는 사이에 소켓이 닫혔다: 종료 처리가 이 연결을 못 보고 지나갔을 수 있다.
+            release(simpSessionId);
+        }
         return true;
+    }
+
+    void heartbeatTimedOut(String simpSessionId) {
+        heartbeatTimeouts.add(simpSessionId);
     }
 
     void subscribed(String simpSessionId, String subscriptionId, UUID sessionId) {
@@ -91,16 +108,25 @@ public class StompConnections {
 
     @EventListener
     void onDisconnect(SessionDisconnectEvent event) {
-        Connection connection = connections.remove(event.getSessionId());
+        release(event.getSessionId());
+    }
+
+    /** 연결 정리. 목록에서 꺼낸 쪽만 정리하므로 두 번 불려도 한 번만 처리한다. */
+    private void release(String simpSessionId) {
+        boolean heartbeatTimeout = heartbeatTimeouts.remove(simpSessionId);
+        Connection connection = connections.remove(simpSessionId);
         if (connection == null) {
             return;
         }
         connection.expiry().cancel(false);
         connection.subscriptions().values().forEach(bus::onLocalUnsubscribe);
-        byUser.computeIfPresent(connection.principal().userId(), (userId, sessions) -> {
-            sessions.remove(event.getSessionId());
+        UUID userId = connection.principal().userId();
+        byUser.computeIfPresent(userId, (id, sessions) -> {
+            sessions.remove(simpSessionId);
             return sessions.isEmpty() ? null : sessions;
         });
+        presence.disconnected(userId, simpSessionId,
+                heartbeatTimeout ? DisconnectReason.HEARTBEAT_TIMEOUT : DisconnectReason.SOCKET_CLOSED);
     }
 
     WebSocketHandler decorate(WebSocketHandler handler) {

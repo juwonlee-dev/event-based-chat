@@ -1,5 +1,6 @@
 package com.eventchat.realtime;
 
+import com.eventchat.presence.PresenceTracker;
 import com.eventchat.session.EventView;
 import com.eventchat.stomp.StompDelivery;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +22,7 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>발행이 실패하면 저하 상태로 바꾸고 자기 노드의 구독자에게만 직접 전달한다.</li>
  *   <li>구독 연결이 다시 붙으면(출력 버퍼 초과, Redis 재시작 등) 그 사이 메시지를 잃었을 수 있으므로
- *       로컬 세션 구독 전체에 SYSTEM_RESYNC를 보낸다.</li>
+ *       로컬 세션 구독 전체에 SYSTEM_RESYNC를 보내고, 이 노드의 연결을 presence에 다시 등록한다.</li>
  * </ul>
  */
 @Slf4j
@@ -34,12 +35,15 @@ public class PatternRealtimeBus implements RealtimeBus, MessageListener, Subscri
     private final StringRedisTemplate redis;
     private final StompDelivery delivery;
     private final RealtimeHealth health;
+    private final PresenceTracker presence;
     private final AtomicBoolean subscribedOnce = new AtomicBoolean();
 
-    public PatternRealtimeBus(StringRedisTemplate redis, StompDelivery delivery, RealtimeHealth health) {
+    public PatternRealtimeBus(StringRedisTemplate redis, StompDelivery delivery, RealtimeHealth health,
+            PresenceTracker presence) {
         this.redis = redis;
         this.delivery = delivery;
         this.health = health;
+        this.presence = presence;
     }
 
     @Override
@@ -71,6 +75,8 @@ public class PatternRealtimeBus implements RealtimeBus, MessageListener, Subscri
         log.warn("realtime pattern re-subscribed, sending SYSTEM_RESYNC to {} local sessions", sessions.size());
         sessions.forEach(sessionId ->
                 delivery.toTopic(sessionId, Map.of("kind", "SYSTEM_RESYNC", "sessionId", sessionId)));
+        // Lettuce 이벤트 루프 스레드다. Redis 명령을 기다리는 일은 다른 스레드로 넘긴다.
+        Thread.ofVirtual().start(() -> presence.reregister("RESUBSCRIBED"));
     }
 
     @Override
