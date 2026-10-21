@@ -1,5 +1,6 @@
 package com.eventchat.web;
 
+import com.eventchat.restore.RestoreProperties;
 import com.eventchat.session.IngestProperties;
 import com.eventchat.session.ReadPathProperties;
 import com.eventchat.session.WriteProperties;
@@ -13,7 +14,7 @@ import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties({MessageProperties.class, WriteProperties.class, IngestProperties.class,
-        ReadPathProperties.class})
+        ReadPathProperties.class, RestoreProperties.class})
 @OpenAPIDefinition(
         info = @Info(title = "Event-based Chat API", version = "v1",
                 description = "1:1 실시간 상담 채팅과 이벤트 기반 상태 복원 API"),

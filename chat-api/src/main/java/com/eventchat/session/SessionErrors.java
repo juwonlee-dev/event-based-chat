@@ -7,12 +7,12 @@ import com.eventchat.web.error.ErrorCode;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 
-final class SessionErrors {
+public final class SessionErrors {
 
     private SessionErrors() {
     }
 
-    static ApiException notFound() {
+    public static ApiException notFound() {
         return new ApiException(ErrorCode.SESSION_NOT_FOUND, "세션을 찾을 수 없습니다.");
     }
 
@@ -25,7 +25,7 @@ final class SessionErrors {
     }
 
     /** 409에는 화면에서 대기/종료를 구분할 수 있도록 현재 상태를 함께 싣는다. */
-    static ApiException rejected(Rejection reason, SessionStatus status) {
+    public static ApiException rejected(Rejection reason, SessionStatus status) {
         ErrorCode code = ErrorCode.valueOf(reason.name());
         Map<String, Object> properties = code.status() == HttpStatus.CONFLICT
                 ? Map.of("sessionStatus", status.name())

@@ -96,7 +96,7 @@ public class SessionQueryService {
     }
 
     /** 퇴장한 참여자는 상태와 관계없이 막는다. 대기 중인 세션의 상세는 상대를 찾을 수 있도록 공개한다. */
-    private static void checkReadable(ChatSession session, List<SessionParticipant> sessionParticipants,
+    public static void checkReadable(ChatSession session, List<SessionParticipant> sessionParticipants,
             UUID viewerId, boolean admin, boolean waitingIsPublic) {
         Optional<SessionParticipant> self = sessionParticipants.stream()
                 .filter(p -> p.getUserId().equals(viewerId))

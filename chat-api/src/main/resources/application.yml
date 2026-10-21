@@ -64,6 +64,11 @@ chat:
     max-concurrent-per-node: 6
   read-path:
     max-concurrent-per-node: 3
+  restore:
+    timeout: 5s
+    default-item-limit: 50
+    max-item-limit: 200
+    future-tolerance: 60s
   ingest:
     typing-ttl: 10s
     typing-min-store-interval: 3s
