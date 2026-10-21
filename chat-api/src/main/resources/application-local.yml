@@ -1,0 +1,4 @@
+# 로컬 개발 프로필: 시드 사용자를 함께 넣는다.
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/seed
