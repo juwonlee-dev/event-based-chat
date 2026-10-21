@@ -38,6 +38,7 @@ public class SessionEventController {
 
     private final EventIngestor ingestor;
     private final SessionQueryService queries;
+    private final ReadPermits readPermits;
 
     /**
      * 이벤트 수집.
@@ -95,8 +96,8 @@ public class SessionEventController {
         }
         // to는 그 밀리초 끝까지 포함한다(응답의 serverTime을 그대로 넣어도 그 이벤트가 빠지지 않도록).
         Instant before = toTime == null ? null : toTime.plusMillis(1);
-        return queries.events(sessionId, UUID.fromString(jwt.getSubject()), admin,
-                new SessionEventSearchRepository.Range(sessionId, afterSeq, fromTime, before, types), limit);
+        return readPermits.run(() -> queries.events(sessionId, UUID.fromString(jwt.getSubject()), admin,
+                new SessionEventSearchRepository.Range(sessionId, afterSeq, fromTime, before, types), limit));
     }
 
     /** 응답 시각과 같은 밀리초 단위로 해석한다. */

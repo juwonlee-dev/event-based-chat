@@ -41,6 +41,7 @@ public class SessionController {
 
     private final SessionWriter writer;
     private final SessionQueryService queries;
+    private final ReadPermits readPermits;
 
     /** 같은 Idempotency-Key로 다시 보내면 처음 만든 세션을 200으로 돌려준다. */
     @PostMapping
@@ -88,7 +89,7 @@ public class SessionController {
         SessionListQuery query = new SessionListQuery(createdFrom, createdTo,
                 statuses == null ? Set.of() : statuses, categories == null ? Set.of() : categories,
                 titleQuery, participant != null);
-        return queries.list(query, userId(jwt), cursor, limit);
+        return readPermits.run(() -> queries.list(query, userId(jwt), cursor, limit));
     }
 
     @GetMapping("/{sessionId}")
