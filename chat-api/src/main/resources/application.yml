@@ -54,3 +54,15 @@ management:
       group:
         readiness:
           include: readinessState
+
+chat:
+  message:
+    max-length: 2000
+  jwt:
+    issuer: event-based-chat
+    access-ttl: 30m
+    clock-skew: 30s
+    secret: ${JWT_SECRET}
+  refresh-token:
+    ttl: 14d
+    cleanup-after: 30d
