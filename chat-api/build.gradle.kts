@@ -4,7 +4,7 @@ plugins {
 
 dependencies {
     implementation(platform(libs.spring.boot.bom))
-    implementation(project(":chat-domain"))
+    implementation(project(":chat-persistence"))
 
     implementation(libs.spring.boot.starter.webmvc)
     implementation(libs.spring.boot.starter.actuator)

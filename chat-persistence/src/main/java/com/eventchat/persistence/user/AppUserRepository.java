@@ -1,4 +1,4 @@
-package com.eventchat.domain.user;
+package com.eventchat.persistence.user;
 
 import java.util.Optional;
 import java.util.UUID;

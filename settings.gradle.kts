@@ -6,4 +6,4 @@ dependencyResolutionManagement {
     }
 }
 
-include("chat-domain", "chat-api")
+include("chat-domain", "chat-persistence", "chat-api")

@@ -1,6 +1,6 @@
 package com.eventchat.security;
 
-import com.eventchat.domain.user.AppUser;
+import com.eventchat.persistence.user.AppUser;
 import java.time.Instant;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;

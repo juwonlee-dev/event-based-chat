@@ -1,9 +1,9 @@
 package com.eventchat.web;
 
-import com.eventchat.domain.user.AppUser;
-import com.eventchat.domain.user.AppUserRepository;
 import com.eventchat.domain.user.Category;
 import com.eventchat.domain.user.Role;
+import com.eventchat.persistence.user.AppUser;
+import com.eventchat.persistence.user.AppUserRepository;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
 import java.util.UUID;

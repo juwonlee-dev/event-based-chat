@@ -1,7 +1,7 @@
 package com.eventchat.security;
 
-import com.eventchat.domain.user.AppUser;
-import com.eventchat.domain.user.AppUserRepository;
+import com.eventchat.persistence.user.AppUser;
+import com.eventchat.persistence.user.AppUserRepository;
 import com.eventchat.security.RefreshTokenService.RotationResult;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;

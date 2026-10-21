@@ -5,6 +5,7 @@ WORKDIR /workspace
 COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
 COPY chat-domain chat-domain
+COPY chat-persistence chat-persistence
 COPY chat-api chat-api
 RUN --mount=type=cache,target=/root/.gradle \
     chmod +x gradlew \

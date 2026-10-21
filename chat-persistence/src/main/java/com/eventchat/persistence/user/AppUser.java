@@ -1,5 +1,7 @@
-package com.eventchat.domain.user;
+package com.eventchat.persistence.user;
 
+import com.eventchat.domain.user.Category;
+import com.eventchat.domain.user.Role;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
