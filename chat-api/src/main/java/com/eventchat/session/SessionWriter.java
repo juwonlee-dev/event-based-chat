@@ -1,6 +1,8 @@
 package com.eventchat.session;
 
 import com.eventchat.domain.session.Decision;
+import com.eventchat.domain.session.EventType;
+import com.eventchat.domain.session.IngestPolicy;
 import com.eventchat.domain.session.NewEvent;
 import com.eventchat.domain.session.SessionCommand;
 import com.eventchat.domain.session.SessionDecider;
@@ -20,6 +22,7 @@ import com.eventchat.persistence.user.AppUserRepository;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
 import com.eventchat.worker.SnapshotTopics;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -32,6 +35,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Semaphore;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -57,6 +61,8 @@ public class SessionWriter {
 
     private final TransactionTemplate tx;
     private final Semaphore permits;
+    private final IngestPolicy policy;
+    private final MeterRegistry meters;
     private final AppUserRepository users;
     private final ChatSessionRepository sessions;
     private final SessionParticipantRepository participants;
@@ -64,10 +70,13 @@ public class SessionWriter {
     private final EventOutboxRepository outbox;
 
     public SessionWriter(PlatformTransactionManager transactionManager, WriteProperties properties,
-            AppUserRepository users, ChatSessionRepository sessions, SessionParticipantRepository participants,
+            IngestProperties ingestProperties, MeterRegistry meters, AppUserRepository users,
+            ChatSessionRepository sessions, SessionParticipantRepository participants,
             SessionEventRepository events, EventOutboxRepository outbox) {
         this.tx = new TransactionTemplate(transactionManager);
         this.permits = new Semaphore(properties.maxConcurrentPerNode());
+        this.policy = ingestProperties.toPolicy();
+        this.meters = meters;
         this.users = users;
         this.sessions = sessions;
         this.participants = participants;
@@ -92,33 +101,61 @@ public class SessionWriter {
         });
     }
 
+    /** 참여·퇴장·종료. 같은 멱등 키로 다시 오면 상태 판정 없이 현재 세션을 돌려준다. */
     public SessionView execute(UUID sessionId, UUID actorId, CommandType type, String idempotencyKey) {
-        byte[] requestHash = requestHash(type.name(), "");
+        Outcome outcome = write(sessionId, actorId, idempotencyKey, requestHash(type.name(), ""), null,
+                (actor, at) -> command(type, actor));
+        return SessionView.of(outcome.session(), outcome.participants());
+    }
+
+    /** 메시지. clientEventId가 멱등 키이고, 같은 키로 다시 오면 처음 저장한 이벤트를 돌려준다. */
+    public IngestResult message(UUID sessionId, UUID actorId, String clientEventId, String content,
+            Instant clientTime) {
+        Outcome outcome = write(sessionId, actorId, clientEventId, requestHash(EventType.MESSAGE.name(), content),
+                clientTime, (actor, at) -> new SessionCommand.Message(actor.getId(), content));
+        return ingested(EventType.MESSAGE, outcome);
+    }
+
+    public IngestResult typing(UUID sessionId, UUID actorId, boolean started) {
+        Outcome outcome = write(sessionId, actorId, null, null, null,
+                (actor, at) -> new SessionCommand.Typing(actor.getId(), started, at));
+        return ingested(started ? EventType.TYPING_STARTED : EventType.TYPING_STOPPED, outcome);
+    }
+
+    public IngestResult readCursor(UUID sessionId, UUID actorId, long upToSeq) {
+        Outcome outcome = write(sessionId, actorId, null, null, null,
+                (actor, at) -> new SessionCommand.ReadCursor(actor.getId(), upToSeq, at));
+        return ingested(EventType.READ_CURSOR, outcome);
+    }
+
+    private Outcome write(UUID sessionId, UUID actorId, String idempotencyKey, byte[] requestHash,
+            Instant clientTime, BiFunction<AppUser, Instant, SessionCommand> commandOf) {
         return withPermit(() -> tx.execute(status -> {
             AppUser actor = loadActor(actorId);
             ChatSession session = sessions.findForUpdate(sessionId).orElseThrow(SessionErrors::notFound);
+            List<SessionParticipant> current = new ArrayList<>(participants.findBySessionIdOrderByJoinSeq(sessionId));
             if (idempotencyKey != null) {
                 Optional<SessionEvent> previous =
                         events.findBySessionIdAndActorIdAndClientEventId(sessionId, actorId, idempotencyKey);
                 if (previous.isPresent()) {
                     checkSameRequest(previous.get(), requestHash);
-                    return SessionView.of(session, participants.findBySessionIdOrderByJoinSeq(sessionId));
+                    return new Outcome(session, current, Result.REPLAYED, List.of(previous.get()));
                 }
             }
 
-            List<SessionParticipant> current = new ArrayList<>(participants.findBySessionIdOrderByJoinSeq(sessionId));
-            SessionState state = new SessionState(session.getStatus(), current.stream()
-                    .map(p -> new SessionState.Participant(p.getUserId(), p.isLeft()))
-                    .toList());
-            return switch (SessionDecider.decide(state, command(type, actor))) {
+            Instant at = latest(sessions.clockTimestamp(), session.getLastEventAt());
+            return switch (SessionDecider.decide(state(session, current), commandOf.apply(actor, at), policy)) {
                 case Decision.Rejected rejected -> throw SessionErrors.rejected(rejected.reason(), session.getStatus());
+                case Decision.Suppressed suppressed -> new Outcome(session, current, Result.SUPPRESSED, List.of());
                 case Decision.Accepted accepted -> {
                     long seqBefore = session.getLastSeq();
-                    Instant at = latest(sessions.clockTimestamp(), session.getLastEventAt());
-                    append(session, actor, accepted.events(), idempotencyKey, requestHash, at, current);
-                    applyTransition(session, accepted.transition(), at, current);
+                    List<SessionEvent> appended = append(session, actor, accepted.events(), idempotencyKey,
+                            requestHash, at, clientTime, current);
+                    if (accepted.transition() != null) {
+                        applyTransition(session, accepted.transition(), at, current);
+                    }
                     requestSnapshotIfNeeded(session, seqBefore, accepted.transition());
-                    yield SessionView.of(session, current);
+                    yield new Outcome(session, current, Result.APPLIED, appended);
                 }
             };
         }));
@@ -136,7 +173,7 @@ public class SessionWriter {
         ChatSession session = sessions.save(ChatSession.create(title, actor.getCategory(), actorId, now));
         List<SessionParticipant> joined = new ArrayList<>();
         append(session, actor, SessionDecider.create(actorId, actor.getRole(), actor.getCategory(),
-                actor.getDisplayName(), title), idempotencyKey, requestHash, now, joined);
+                actor.getDisplayName(), title), idempotencyKey, requestHash, now, null, joined);
         return new CreateResult(SessionView.of(session, joined), false);
     }
 
@@ -147,14 +184,17 @@ public class SessionWriter {
                 participants.findBySessionIdOrderByJoinSeq(session.getId())), true);
     }
 
-    /** 이벤트마다 seq를 이어 붙여 저장하고, 참여·퇴장은 참여자 행에도 반영한다. */
-    private void append(ChatSession session, AppUser actor, List<NewEvent> newEvents, String idempotencyKey,
-            byte[] requestHash, Instant at, List<SessionParticipant> sessionParticipants) {
+    /** 이벤트마다 seq를 이어 붙여 저장하고, 참여자 행의 현재값(참여·typing·읽음)에도 반영한다. */
+    private List<SessionEvent> append(ChatSession session, AppUser actor, List<NewEvent> newEvents,
+            String idempotencyKey, byte[] requestHash, Instant at, Instant clientTime,
+            List<SessionParticipant> sessionParticipants) {
+        List<SessionEvent> appended = new ArrayList<>();
         for (NewEvent event : newEvents) {
             long seq = session.nextSeq(at);
             boolean keyed = event.keyed() && idempotencyKey != null;
-            events.save(SessionEvent.of(session.getId(), seq, event.type(), actor.getId(), event.subjectId(),
-                    keyed ? idempotencyKey : null, keyed ? requestHash : null, event.payload(), at));
+            Map<String, Object> payload = event.payload();
+            String content = null;
+            Integer msgNo = null;
             switch (event.type()) {
                 case JOIN -> {
                     sessionParticipants.add(participants.save(SessionParticipant.join(session.getId(),
@@ -165,10 +205,29 @@ public class SessionWriter {
                     find(sessionParticipants, actor.getId()).leave(seq, at);
                     session.participantLeft();
                 }
+                case MESSAGE -> {
+                    // 본문은 content 컬럼에만 둔다(상태 fold 쿼리가 읽지 않도록).
+                    content = (String) payload.get("content");
+                    payload = null;
+                    msgNo = session.nextMsgNo();
+                    find(sessionParticipants, actor.getId()).messageSent(seq, msgNo);
+                }
+                case TYPING_STARTED -> find(sessionParticipants, actor.getId()).startTyping(seq, at);
+                case TYPING_STOPPED -> find(sessionParticipants, actor.getId()).stopTyping();
+                case READ_CURSOR -> {
+                    long upToSeq = ((Number) payload.get("upToSeq")).longValue();
+                    int readMsgNo = events.findLastMsgNoUpTo(session.getId(), upToSeq);
+                    payload = Map.of("upToSeq", upToSeq, "readMsgNo", readMsgNo);
+                    find(sessionParticipants, actor.getId()).read(upToSeq, readMsgNo, at);
+                }
                 default -> {
                 }
             }
+            appended.add(events.save(SessionEvent.of(session.getId(), seq, event.type(), actor.getId(),
+                    event.subjectId(), keyed ? idempotencyKey : null, keyed ? requestHash : null, payload,
+                    content, msgNo, at, clientTime)));
         }
+        return appended;
     }
 
     private static void applyTransition(ChatSession session, Transition transition, Instant at,
@@ -182,11 +241,37 @@ public class SessionWriter {
     /** 종단 전이이거나 seq가 100 단위 경계를 넘으면 같은 트랜잭션에서 스냅샷 갱신을 요청한다. */
     private void requestSnapshotIfNeeded(ChatSession session, long seqBefore, Transition transition) {
         boolean crossed = seqBefore / SNAPSHOT_EVERY < session.getLastSeq() / SNAPSHOT_EVERY;
-        if (crossed || transition.to().isTerminal()) {
+        if (crossed || (transition != null && transition.to().isTerminal())) {
             String sessionId = session.getId().toString();
             outbox.save(EventOutbox.of(SnapshotTopics.REQUESTS, sessionId,
                     Map.of("sessionId", sessionId, "upToSeq", session.getLastSeq())));
         }
+    }
+
+    /** 저장하지 않고 걸러 낸 요청(재전송 중복, 같은 상태의 반복)은 지표로만 남긴다. */
+    private IngestResult ingested(EventType type, Outcome outcome) {
+        return switch (outcome.result()) {
+            case APPLIED -> new IngestResult(IngestResult.Status.STORED, outcome.events().getFirst());
+            case REPLAYED -> {
+                countSuppressed(type, "DUPLICATE");
+                yield new IngestResult(IngestResult.Status.DUPLICATE, outcome.events().getFirst());
+            }
+            case SUPPRESSED -> {
+                countSuppressed(type, "REPEATED");
+                yield new IngestResult(IngestResult.Status.SUPPRESSED, null);
+            }
+        };
+    }
+
+    private void countSuppressed(EventType type, String reason) {
+        meters.counter("chat.events.suppressed", "type", type.name(), "reason", reason).increment();
+    }
+
+    private static SessionState state(ChatSession session, List<SessionParticipant> sessionParticipants) {
+        return new SessionState(session.getStatus(), session.getLastSeq(), sessionParticipants.stream()
+                .map(p -> new SessionState.Participant(p.getUserId(), p.isLeft(), p.getTypingAt(), p.getReadSeq(),
+                        p.getLastReadStoreAt()))
+                .toList());
     }
 
     private AppUser loadActor(UUID actorId) {
@@ -253,5 +338,25 @@ public class SessionWriter {
     }
 
     public record CreateResult(SessionView session, boolean replayed) {
+    }
+
+    /** @param event 저장했거나(STORED) 처음 저장된(DUPLICATE) 이벤트. SUPPRESSED면 null */
+    public record IngestResult(Status status, SessionEvent event) {
+
+        public enum Status {
+            STORED,
+            DUPLICATE,
+            SUPPRESSED
+        }
+    }
+
+    private enum Result {
+        APPLIED,
+        REPLAYED,
+        SUPPRESSED
+    }
+
+    private record Outcome(ChatSession session, List<SessionParticipant> participants, Result result,
+            List<SessionEvent> events) {
     }
 }

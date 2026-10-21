@@ -1,5 +1,6 @@
 package com.eventchat.web;
 
+import com.eventchat.session.IngestProperties;
 import com.eventchat.session.WriteProperties;
 import io.swagger.v3.oas.annotations.OpenAPIDefinition;
 import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
@@ -10,7 +11,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({MessageProperties.class, WriteProperties.class})
+@EnableConfigurationProperties({MessageProperties.class, WriteProperties.class, IngestProperties.class})
 @OpenAPIDefinition(
         info = @Info(title = "Event-based Chat API", version = "v1",
                 description = "1:1 실시간 상담 채팅과 이벤트 기반 상태 복원 API"),

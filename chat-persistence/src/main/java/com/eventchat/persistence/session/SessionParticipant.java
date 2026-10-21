@@ -63,6 +63,22 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
     @Column(name = "left_at")
     private Instant leftAt;
 
+    /** 입력 중이면 마지막으로 저장한 TYPING_STARTED의 seq·시각, 아니면 null. */
+    @Column(name = "typing_seq")
+    private Long typingSeq;
+
+    @Column(name = "typing_at")
+    private Instant typingAt;
+
+    @Column(name = "read_seq", nullable = false)
+    private long readSeq;
+
+    @Column(name = "read_msg_no", nullable = false)
+    private int readMsgNo;
+
+    @Column(name = "last_read_store_at")
+    private Instant lastReadStoreAt;
+
     public static SessionParticipant join(UUID sessionId, UUID userId, Role role, Category category,
             String displayName, long seq, Instant at) {
         SessionParticipant participant = new SessionParticipant();
@@ -85,6 +101,29 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
         this.leftSeq = seq;
         this.leftAt = at;
         this.active = false;
+    }
+
+    public void startTyping(long seq, Instant at) {
+        this.typingSeq = seq;
+        this.typingAt = at;
+    }
+
+    public void stopTyping() {
+        this.typingSeq = null;
+        this.typingAt = null;
+    }
+
+    /** 보낸 사람은 자기 메시지를 읽은 것으로 보고, 입력도 멈춘 것으로 본다. */
+    public void messageSent(long seq, int msgNo) {
+        this.readSeq = seq;
+        this.readMsgNo = msgNo;
+        stopTyping();
+    }
+
+    public void read(long upToSeq, int msgNo, Instant at) {
+        this.readSeq = upToSeq;
+        this.readMsgNo = msgNo;
+        this.lastReadStoreAt = at;
     }
 
     public void deactivate() {

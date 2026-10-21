@@ -62,6 +62,10 @@ chat:
     max-length: 2000
   write:
     max-concurrent-per-node: 6
+  ingest:
+    typing-ttl: 10s
+    typing-min-store-interval: 3s
+    read-min-store-interval: 1s
   jwt:
     issuer: event-based-chat
     access-ttl: 30m

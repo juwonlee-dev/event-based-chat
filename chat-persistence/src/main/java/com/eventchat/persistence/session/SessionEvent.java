@@ -77,7 +77,8 @@ public class SessionEvent extends AssignedIdEntity<SessionEvent.Key> {
     private short schemaVersion;
 
     public static SessionEvent of(UUID sessionId, long seq, EventType type, UUID actorId, UUID subjectId,
-            String clientEventId, byte[] requestHash, Map<String, Object> payload, Instant serverTs) {
+            String clientEventId, byte[] requestHash, Map<String, Object> payload, String content, Integer msgNo,
+            Instant serverTs, Instant clientTs) {
         SessionEvent event = new SessionEvent();
         event.sessionId = sessionId;
         event.seq = seq;
@@ -87,7 +88,10 @@ public class SessionEvent extends AssignedIdEntity<SessionEvent.Key> {
         event.clientEventId = clientEventId;
         event.requestHash = requestHash;
         event.payload = payload;
+        event.content = content;
+        event.msgNo = msgNo;
         event.serverTs = serverTs;
+        event.clientTs = clientTs;
         event.schemaVersion = 1;
         return event;
     }

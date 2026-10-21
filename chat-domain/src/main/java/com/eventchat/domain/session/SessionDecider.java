@@ -3,9 +3,14 @@ package com.eventchat.domain.session;
 import com.eventchat.domain.session.SessionCommand.End;
 import com.eventchat.domain.session.SessionCommand.Join;
 import com.eventchat.domain.session.SessionCommand.Leave;
+import com.eventchat.domain.session.SessionCommand.Message;
+import com.eventchat.domain.session.SessionCommand.ReadCursor;
+import com.eventchat.domain.session.SessionCommand.Typing;
 import com.eventchat.domain.session.SessionState.Participant;
 import com.eventchat.domain.user.Category;
 import com.eventchat.domain.user.Role;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +27,7 @@ import java.util.UUID;
  * 종단 상태      SESSION_NOT_JOINABLE  SESSION_NOT_ACTIVE  SESSION_NOT_ACTIVE
  * </pre>
  * 참여자 확인(NOT_PARTICIPANT, PARTICIPANT_LEFT)이 상태 확인보다 먼저다.
+ * 메시지·typing·읽음 커서는 IN_PROGRESS에서만 받고, typing·읽음은 같은 상태의 반복이면 저장하지 않는다.
  */
 public final class SessionDecider {
 
@@ -40,11 +46,14 @@ public final class SessionDecider {
                 new NewEvent(EventType.JOIN, creatorId, joinPayload(role, category, displayName), false));
     }
 
-    public static Decision decide(SessionState state, SessionCommand command) {
+    public static Decision decide(SessionState state, SessionCommand command, IngestPolicy policy) {
         return switch (command) {
             case Join join -> join(state, join);
             case Leave leave -> leave(state, leave);
             case End end -> end(state, end);
+            case Message message -> message(state, message);
+            case Typing typing -> typing(state, typing, policy);
+            case ReadCursor read -> read(state, read, policy);
         };
     }
 
@@ -92,6 +101,67 @@ public final class SessionDecider {
         Transition transition = new Transition(SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED,
                 TransitionReason.ENDED);
         return new Decision.Accepted(List.of(statusChanged(transition, command.actorId(), true)), transition);
+    }
+
+    /** 본문은 payload.content로 넘기고, 저장할 때 별도 컬럼으로 옮긴다. 멱등 키(clientEventId)는 필수다. */
+    private static Decision message(SessionState state, Message command) {
+        Optional<Rejection> notAllowed = checkActive(state, command.actorId());
+        if (notAllowed.isPresent()) {
+            return new Decision.Rejected(notAllowed.get());
+        }
+        return new Decision.Accepted(List.of(new NewEvent(EventType.MESSAGE, null,
+                Map.of("content", command.content()), true)), null);
+    }
+
+    /**
+     * STARTED는 입력 중이 아니거나 마지막 STARTED로부터 최소 간격이 지났을 때만,
+     * STOPPED는 입력 중일 때만 저장한다.
+     */
+    private static Decision typing(SessionState state, Typing command, IngestPolicy policy) {
+        Optional<Rejection> notAllowed = checkActive(state, command.actorId());
+        if (notAllowed.isPresent()) {
+            return new Decision.Rejected(notAllowed.get());
+        }
+        Instant typingAt = state.participant(command.actorId()).orElseThrow().typingAt();
+        boolean typing = typingAt != null && elapsed(typingAt, command.at()).compareTo(policy.typingTtl()) < 0;
+        boolean store = command.started()
+                ? !typing || elapsed(typingAt, command.at()).compareTo(policy.typingMinStoreInterval()) >= 0
+                : typing;
+        if (!store) {
+            return new Decision.Suppressed();
+        }
+        EventType type = command.started() ? EventType.TYPING_STARTED : EventType.TYPING_STOPPED;
+        return new Decision.Accepted(List.of(new NewEvent(type, command.actorId(), Map.of(), false)), null);
+    }
+
+    /** 커서는 마지막 seq로 자르고, 앞으로 갔으면서 최소 간격이 지났을 때만 저장한다. */
+    private static Decision read(SessionState state, ReadCursor command, IngestPolicy policy) {
+        Optional<Rejection> notAllowed = checkActive(state, command.actorId());
+        if (notAllowed.isPresent()) {
+            return new Decision.Rejected(notAllowed.get());
+        }
+        Participant self = state.participant(command.actorId()).orElseThrow();
+        long upToSeq = Math.min(command.upToSeq(), state.lastSeq());
+        boolean advanced = upToSeq > self.readSeq();
+        boolean tooSoon = self.lastReadStoreAt() != null
+                && elapsed(self.lastReadStoreAt(), command.at()).compareTo(policy.readMinStoreInterval()) < 0;
+        if (!advanced || tooSoon) {
+            return new Decision.Suppressed();
+        }
+        return new Decision.Accepted(List.of(new NewEvent(EventType.READ_CURSOR, command.actorId(),
+                Map.of("upToSeq", upToSeq), false)), null);
+    }
+
+    private static Optional<Rejection> checkActive(SessionState state, UUID actorId) {
+        Optional<Rejection> notAllowed = checkParticipant(state, actorId);
+        if (notAllowed.isPresent()) {
+            return notAllowed;
+        }
+        return state.status() == SessionStatus.IN_PROGRESS ? Optional.empty() : Optional.of(Rejection.SESSION_NOT_ACTIVE);
+    }
+
+    private static Duration elapsed(Instant from, Instant to) {
+        return Duration.between(from, to);
     }
 
     private static Optional<Rejection> checkParticipant(SessionState state, UUID actorId) {

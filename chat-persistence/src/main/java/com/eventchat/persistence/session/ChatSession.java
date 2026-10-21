@@ -87,6 +87,11 @@ public class ChatSession {
         return ++lastSeq;
     }
 
+    /** 세션 안 메시지 번호(1부터). 안 읽은 수 = message_count − read_msg_no. */
+    public int nextMsgNo() {
+        return ++messageCount;
+    }
+
     public void participantJoined() {
         participantCount++;
     }
