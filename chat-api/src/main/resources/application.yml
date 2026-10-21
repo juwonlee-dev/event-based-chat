@@ -16,6 +16,8 @@ spring:
   flyway:
     user: ${DB_OWNER_USER:chat_owner}
     password: ${DB_OWNER_PASSWORD}
+    placeholders:
+      appUser: ${DB_APP_USER:chat_app}
   jpa:
     open-in-view: false
     hibernate:
