@@ -1,7 +1,9 @@
 package com.eventchat.web.error;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
@@ -27,6 +29,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             response.header(HttpHeaders.RETRY_AFTER, String.valueOf(Math.max(1, e.getRetryAfter().toSeconds())));
         }
         return response.body(problem);
+    }
+
+    /** 세션 행 잠금을 lock_timeout 안에 얻지 못했다. 같은 멱등 키로 다시 보내면 된다. */
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    ResponseEntity<ProblemDetail> handleLockTimeout(PessimisticLockingFailureException e) {
+        return handleApiException(ApiException.unavailable(Duration.ofSeconds(1)));
     }
 
     @Override

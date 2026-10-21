@@ -60,6 +60,8 @@ management:
 chat:
   message:
     max-length: 2000
+  write:
+    max-concurrent-per-node: 6
   jwt:
     issuer: event-based-chat
     access-ttl: 30m
