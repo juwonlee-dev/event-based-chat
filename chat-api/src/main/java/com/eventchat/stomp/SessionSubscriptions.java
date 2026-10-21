@@ -11,6 +11,7 @@ import com.eventchat.persistence.session.SessionParticipantRepository;
 import com.eventchat.session.EventView;
 import com.eventchat.session.IngestProperties;
 import com.eventchat.web.error.ErrorCode;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -35,10 +36,11 @@ public class SessionSubscriptions {
     private final StompProperties properties;
     private final IngestProperties ingestProperties;
     private final Semaphore resumePermits;
+    private final MeterRegistry meters;
 
     public SessionSubscriptions(ChatSessionRepository sessions, SessionParticipantRepository participants,
             SessionEventRepository events, StompDelivery delivery, StompProperties properties,
-            IngestProperties ingestProperties) {
+            IngestProperties ingestProperties, MeterRegistry meters) {
         this.sessions = sessions;
         this.participants = participants;
         this.events = events;
@@ -46,6 +48,7 @@ public class SessionSubscriptions {
         this.properties = properties;
         this.ingestProperties = ingestProperties;
         this.resumePermits = new Semaphore(properties.resumeMaxConcurrent());
+        this.meters = meters;
     }
 
     /** 현재 참여자(퇴장하지 않음)이고 세션이 WAITING·IN_PROGRESS일 때만 구독할 수 있다. */
@@ -105,6 +108,7 @@ public class SessionSubscriptions {
             resumed.put("fromSeq", afterSeq + 1);
             resumed.put("toSeq", rows.isEmpty() ? afterSeq : rows.getLast().seq());
             delivery.toSubscription(simpSessionId, subscriptionId, sessionId, delivery.json(resumed));
+            meters.counter("chat.realtime.resume", "result", "resumed").increment();
         } finally {
             resumePermits.release();
         }
@@ -116,6 +120,7 @@ public class SessionSubscriptions {
         resync.put("sessionId", sessionId);
         resync.put("fromSeq", afterSeq + 1);
         delivery.toSubscription(simpSessionId, subscriptionId, sessionId, delivery.json(resync));
+        meters.counter("chat.realtime.resume", "result", "resync").increment();
     }
 
     private static Map<String, Object> rejected(UUID sessionId, String code, String sessionStatus, Long lastSeq) {

@@ -7,6 +7,7 @@ import com.eventchat.persistence.session.ChatSessionRepository;
 import com.eventchat.persistence.session.SessionSnapshot;
 import com.eventchat.persistence.session.SessionSnapshotRepository;
 import com.eventchat.session.SessionErrors;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -23,15 +24,24 @@ public class SnapshotService {
     private final ChatSessionRepository sessions;
     private final SessionSnapshotRepository snapshots;
     private final StateFolder folder;
+    private final MeterRegistry meters;
 
-    SnapshotService(ChatSessionRepository sessions, SessionSnapshotRepository snapshots, StateFolder folder) {
+    SnapshotService(ChatSessionRepository sessions, SessionSnapshotRepository snapshots, StateFolder folder,
+            MeterRegistry meters) {
         this.sessions = sessions;
         this.snapshots = snapshots;
         this.folder = folder;
+        this.meters = meters;
     }
 
     @Transactional
     public SnapshotResult build(UUID sessionId) {
+        SnapshotResult result = buildSnapshot(sessionId);
+        meters.counter("chat.snapshot.build", "mode", result.mode().name()).increment();
+        return result;
+    }
+
+    private SnapshotResult buildSnapshot(UUID sessionId) {
         ChatSession session = sessions.findById(sessionId).orElseThrow(SessionErrors::notFound);
         Optional<SessionSnapshot> existing = snapshots.findById(sessionId);
         long previousSeq = existing.map(SessionSnapshot::getLastSeq).orElse(0L);

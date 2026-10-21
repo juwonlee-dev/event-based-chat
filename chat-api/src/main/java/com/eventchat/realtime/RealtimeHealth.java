@@ -1,8 +1,12 @@
 package com.eventchat.realtime;
 
 import com.eventchat.stomp.StompDelivery;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.Map;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.connection.RedisConnection;
@@ -25,11 +29,30 @@ public class RealtimeHealth {
     private final StompDelivery delivery;
     private final RealtimeProperties properties;
     private final AtomicBoolean degraded = new AtomicBoolean();
+    private final AtomicLong usedMemory = new AtomicLong();
+    private final AtomicLong pubsubPatterns = new AtomicLong();
 
-    public RealtimeHealth(StringRedisTemplate redis, @Lazy StompDelivery delivery, RealtimeProperties properties) {
+    public RealtimeHealth(StringRedisTemplate redis, @Lazy StompDelivery delivery, RealtimeProperties properties,
+            MeterRegistry meters) {
         this.redis = redis;
         this.delivery = delivery;
         this.properties = properties;
+        Gauge.builder("chat.realtime.degraded", degraded, d -> d.get() ? 1 : 0).register(meters);
+        Gauge.builder("chat.redis.used.memory", usedMemory, AtomicLong::get).baseUnit("bytes").register(meters);
+        Gauge.builder("chat.redis.pubsub.patterns", pubsubPatterns, AtomicLong::get).register(meters);
+    }
+
+    /** 구독 출력 버퍼도 Redis 메모리(maxmemory, noeviction)에 잡히므로 함께 본다. */
+    @Scheduled(fixedDelay = 30_000, initialDelay = 5_000)
+    void collectRedisInfo() {
+        try {
+            Properties memory = redis.execute((RedisCallback<Properties>) c -> c.serverCommands().info("memory"));
+            Properties stats = redis.execute((RedisCallback<Properties>) c -> c.serverCommands().info("stats"));
+            usedMemory.set(Long.parseLong(memory.getProperty("used_memory", "0")));
+            pubsubPatterns.set(Long.parseLong(stats.getProperty("pubsub_patterns", "0")));
+        } catch (RuntimeException e) {
+            log.debug("redis info failed", e);
+        }
     }
 
     @Scheduled(fixedDelayString = "${chat.realtime.health-check-interval}",

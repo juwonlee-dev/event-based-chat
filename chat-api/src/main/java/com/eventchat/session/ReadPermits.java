@@ -1,6 +1,8 @@
 package com.eventchat.session;
 
 import com.eventchat.web.error.ApiException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.concurrent.Semaphore;
 import java.util.function.Supplier;
@@ -15,13 +17,16 @@ public class ReadPermits {
     private static final Duration RETRY_AFTER = Duration.ofSeconds(1);
 
     private final Semaphore permits;
+    private final Counter rejected;
 
-    public ReadPermits(ReadPathProperties properties) {
+    public ReadPermits(ReadPathProperties properties, MeterRegistry meters) {
         this.permits = new Semaphore(properties.maxConcurrentPerNode());
+        this.rejected = meters.counter("chat.read.rejected", "reason", "overload");
     }
 
     public <T> T run(Supplier<T> read) {
         if (!permits.tryAcquire()) {
+            rejected.increment();
             throw ApiException.unavailable(RETRY_AFTER);
         }
         try {

@@ -16,6 +16,7 @@ import com.eventchat.session.SessionQueryService;
 import com.eventchat.session.SessionView.ParticipantState;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -47,10 +48,11 @@ public class TimelineService {
     private final StateFolder folder;
     private final RestoreProperties properties;
     private final Duration typingTtl;
+    private final MeterRegistry meters;
 
     TimelineService(ChatSessionRepository sessions, SessionParticipantRepository participants,
             SessionEventRepository events, SessionSnapshotRepository snapshots, StateFolder folder,
-            RestoreProperties properties, IngestProperties ingestProperties) {
+            RestoreProperties properties, IngestProperties ingestProperties, MeterRegistry meters) {
         this.sessions = sessions;
         this.participants = participants;
         this.events = events;
@@ -58,6 +60,7 @@ public class TimelineService {
         this.folder = folder;
         this.properties = properties;
         this.typingTtl = ingestProperties.typingTtl();
+        this.meters = meters;
     }
 
     /**
@@ -117,6 +120,8 @@ public class TimelineService {
         TimelineView.RestoredFrom restoredFrom = new TimelineView.RestoredFrom(
                 snapshot.isPresent() ? TimelineView.Mode.SNAPSHOT_INCREMENTAL : TimelineView.Mode.FULL_REPLAY,
                 snapshot.map(SessionSnapshot::getLastSeq).orElse(null), replayed, folder.hash(state));
+        meters.counter("chat.timeline.restore", "mode", restoredFrom.mode().name()).increment();
+        meters.summary("chat.timeline.replayed.events").record(replayed);
         return new TimelineView(sessionInfo(session),
                 new TimelineView.AsOf(millis(requestedAt), seq, millis(referenceTime), state.status(),
                         state.messageCount()),

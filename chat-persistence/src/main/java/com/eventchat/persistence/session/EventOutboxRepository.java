@@ -12,4 +12,7 @@ public interface EventOutboxRepository extends JpaRepository<EventOutbox, Long> 
      */
     @Query(value = "SELECT * FROM event_outbox ORDER BY id LIMIT :limit FOR UPDATE SKIP LOCKED", nativeQuery = true)
     List<EventOutbox> claim(int limit);
+
+    @Query("select new com.eventchat.persistence.session.OutboxBacklog(count(o), min(o.createdAt)) from EventOutbox o")
+    OutboxBacklog backlog();
 }

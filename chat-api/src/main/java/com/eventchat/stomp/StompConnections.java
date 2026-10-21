@@ -3,6 +3,8 @@ package com.eventchat.stomp;
 import com.eventchat.presence.DisconnectReason;
 import com.eventchat.presence.PresenceTracker;
 import com.eventchat.realtime.RealtimeBus;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,15 +44,20 @@ public class StompConnections {
     private final StompDelivery delivery;
     private final RealtimeBus bus;
     private final PresenceTracker presence;
+    private final MeterRegistry meters;
 
     public StompConnections(StompProperties properties,
             @Qualifier("stompTaskScheduler") TaskScheduler stompTaskScheduler, StompDelivery delivery, RealtimeBus bus,
-            PresenceTracker presence) {
+            PresenceTracker presence, MeterRegistry meters) {
         this.properties = properties;
         this.scheduler = stompTaskScheduler;
         this.delivery = delivery;
         this.bus = bus;
         this.presence = presence;
+        this.meters = meters;
+        Gauge.builder("chat.ws.connections", connections, Map::size)
+                .description("이 노드에서 CONNECT를 마친 STOMP 연결 수")
+                .register(meters);
     }
 
     /** CONNECT 수락. 사용자의 연결이 이미 상한이면 false. */
@@ -125,8 +132,9 @@ public class StompConnections {
             sessions.remove(simpSessionId);
             return sessions.isEmpty() ? null : sessions;
         });
-        presence.disconnected(userId, simpSessionId,
-                heartbeatTimeout ? DisconnectReason.HEARTBEAT_TIMEOUT : DisconnectReason.SOCKET_CLOSED);
+        DisconnectReason reason = heartbeatTimeout ? DisconnectReason.HEARTBEAT_TIMEOUT : DisconnectReason.SOCKET_CLOSED;
+        meters.counter("chat.ws.disconnects", "reason", reason.name()).increment();
+        presence.disconnected(userId, simpSessionId, reason);
     }
 
     WebSocketHandler decorate(WebSocketHandler handler) {

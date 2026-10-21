@@ -1,6 +1,8 @@
 package com.eventchat.worker;
 
 import com.eventchat.web.error.ApiException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,14 +21,18 @@ import tools.jackson.core.JacksonException;
 class KafkaWorkerConfig {
 
     @Bean
-    DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafka) {
-        DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafka,
+    DefaultErrorHandler kafkaErrorHandler(KafkaTemplate<String, String> kafka, MeterRegistry meters) {
+        DeadLetterPublishingRecoverer toDlt = new DeadLetterPublishingRecoverer(kafka,
                 (record, ex) -> new TopicPartition(SnapshotTopics.REQUESTS_DLT, -1));
+        Counter dltPublished = meters.counter("chat.dlt.published", "topic", SnapshotTopics.REQUESTS_DLT);
         ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(5);
         backOff.setInitialInterval(1_000);
         backOff.setMultiplier(2);
         backOff.setMaxInterval(30_000);
-        DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
+        DefaultErrorHandler handler = new DefaultErrorHandler((record, ex) -> {
+            toDlt.accept(record, ex);
+            dltPublished.increment();
+        }, backOff);
         handler.addNotRetryableExceptions(JacksonException.class, IllegalArgumentException.class, ApiException.class);
         return handler;
     }

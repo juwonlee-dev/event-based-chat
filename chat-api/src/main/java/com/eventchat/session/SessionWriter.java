@@ -344,6 +344,7 @@ public class SessionWriter {
 
     /** 저장하지 않고 걸러 낸 요청(재전송 중복, 같은 상태의 반복)은 지표로만 남긴다. */
     private IngestResult ingested(EventType type, Outcome outcome) {
+        meters.counter("chat.events.ingested", "type", type.name(), "result", outcome.result().name()).increment();
         return switch (outcome.result()) {
             case APPLIED -> new IngestResult(IngestResult.Status.STORED, outcome.events().getFirst());
             case REPLAYED -> {
@@ -408,6 +409,7 @@ public class SessionWriter {
 
     private <T> T withPermit(Supplier<T> work) {
         if (!permits.tryAcquire()) {
+            meters.counter("chat.write.rejected", "reason", "overload").increment();
             throw ApiException.unavailable(RETRY_AFTER);
         }
         try {
