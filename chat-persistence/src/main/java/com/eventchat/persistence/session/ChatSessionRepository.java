@@ -8,7 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
-public interface ChatSessionRepository extends JpaRepository<ChatSession, UUID> {
+public interface ChatSessionRepository extends JpaRepository<ChatSession, UUID>, ChatSessionSearchRepository {
 
     /** 쓰기 직렬화용 행 잠금. 대기 상한은 앱 계정의 lock_timeout(1s)을 따른다. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)

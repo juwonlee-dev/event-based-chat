@@ -1,6 +1,7 @@
 package com.eventchat.web.error;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import lombok.Getter;
 
@@ -20,6 +21,12 @@ public class ApiException extends RuntimeException {
         this.code = code;
         this.properties = properties;
         this.retryAfter = retryAfter;
+    }
+
+    /** 필드 하나의 검증 실패. 형식은 Bean Validation 오류와 같다. */
+    public static ApiException invalid(String field, String reason) {
+        return new ApiException(ErrorCode.VALIDATION_FAILED, "요청 값이 올바르지 않습니다.",
+                Map.of("errors", List.of(Map.of("field", field, "reason", reason))), null);
     }
 
     public static ApiException rateLimited(Duration retryAfter) {

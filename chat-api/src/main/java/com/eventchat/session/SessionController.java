@@ -1,18 +1,20 @@
 package com.eventchat.session;
 
+import com.eventchat.domain.session.SessionStatus;
+import com.eventchat.domain.user.Category;
 import com.eventchat.domain.user.Role;
 import com.eventchat.session.SessionWriter.CommandType;
 import com.eventchat.session.SessionWriter.CreateResult;
 import com.eventchat.web.error.ApiException;
-import com.eventchat.web.error.ErrorCode;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import java.net.URI;
-import java.util.List;
-import java.util.Map;
+import java.time.LocalDate;
+import java.util.Set;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -31,6 +34,10 @@ public class SessionController {
 
     private static final String IDEMPOTENCY_KEY = "Idempotency-Key";
     private static final int IDEMPOTENCY_KEY_MAX_LENGTH = 64;
+    private static final int MAX_LIMIT = 100;
+    /** 짧은 검색어는 일치하는 행이 너무 많아 정렬 비용이 커진다(trigram도 3자부터 가장 효과적). */
+    private static final int TITLE_SEARCH_MIN_LENGTH = 2;
+    private static final int TITLE_MAX_LENGTH = 100;
 
     private final SessionWriter writer;
     private final SessionQueryService queries;
@@ -45,6 +52,43 @@ public class SessionController {
             return ResponseEntity.ok(result.session());
         }
         return ResponseEntity.created(URI.create("/sessions/" + result.session().id())).body(result.session());
+    }
+
+    /**
+     * 모든 세션 목록. 정렬은 createdAt DESC, id DESC로 고정하고 키셋 커서로 넘긴다(전체 건수는 주지 않는다).
+     * 날짜는 KST 기준 YYYY-MM-DD이고 양 끝 날짜를 포함한다.
+     */
+    @GetMapping
+    public SessionSummary.Page list(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate createdTo,
+            @RequestParam(name = "status", required = false) Set<SessionStatus> statuses,
+            @RequestParam(name = "category", required = false) Set<Category> categories,
+            @RequestParam(required = false) String title,
+            @RequestParam(required = false) String participant,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int limit,
+            @AuthenticationPrincipal Jwt jwt) {
+        if (createdFrom != null && createdTo != null && createdFrom.isAfter(createdTo)) {
+            throw ApiException.invalid("createdFrom", "createdTo보다 늦을 수 없습니다.");
+        }
+        String titleQuery = title == null || title.isBlank() ? null : title.strip();
+        if (titleQuery != null) {
+            int length = titleQuery.codePointCount(0, titleQuery.length());
+            if (length < TITLE_SEARCH_MIN_LENGTH || length > TITLE_MAX_LENGTH) {
+                throw ApiException.invalid("title", TITLE_SEARCH_MIN_LENGTH + "~" + TITLE_MAX_LENGTH + "자여야 합니다.");
+            }
+        }
+        if (participant != null && !"me".equals(participant)) {
+            throw ApiException.invalid("participant", "me만 지정할 수 있습니다.");
+        }
+        if (limit < 1 || limit > MAX_LIMIT) {
+            throw ApiException.invalid("limit", "1~" + MAX_LIMIT + " 사이여야 합니다.");
+        }
+        SessionListQuery query = new SessionListQuery(createdFrom, createdTo,
+                statuses == null ? Set.of() : statuses, categories == null ? Set.of() : categories,
+                titleQuery, participant != null);
+        return queries.list(query, userId(jwt), cursor, limit);
     }
 
     @GetMapping("/{sessionId}")
@@ -82,9 +126,7 @@ public class SessionController {
             return null;
         }
         if (idempotencyKey.isBlank() || idempotencyKey.length() > IDEMPOTENCY_KEY_MAX_LENGTH) {
-            throw new ApiException(ErrorCode.VALIDATION_FAILED, "요청 값이 올바르지 않습니다.",
-                    Map.of("errors", List.of(Map.of("field", IDEMPOTENCY_KEY,
-                            "reason", "1~" + IDEMPOTENCY_KEY_MAX_LENGTH + "자여야 합니다."))), null);
+            throw ApiException.invalid(IDEMPOTENCY_KEY, "1~" + IDEMPOTENCY_KEY_MAX_LENGTH + "자여야 합니다.");
         }
         return idempotencyKey;
     }
