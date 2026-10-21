@@ -15,6 +15,8 @@ dependencies {
     implementation(libs.spring.boot.starter.flyway)
     implementation(libs.spring.boot.starter.data.redis)
     implementation(libs.spring.boot.starter.kafka)
+    implementation(libs.spring.boot.starter.opentelemetry)
+    implementation(libs.datasource.micrometer.spring.boot)
     implementation(libs.springdoc.openapi.webmvc.ui)
     runtimeOnly(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)

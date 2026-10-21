@@ -39,6 +39,11 @@ spring:
         delivery.timeout.ms: 5000
     consumer:
       auto-offset-reset: earliest
+    # 발행(outbox relay)과 소비(SnapshotWorker)를 추적에 잇는다.
+    template:
+      observation-enabled: true
+    listener:
+      observation-enabled: true
   mvc:
     problemdetails:
       enabled: true
@@ -70,6 +75,29 @@ management:
       group:
         readiness:
           include: readinessState
+  # 추적은 항상 만들고(로컬 샘플링 1.0), 내보내기는 OTEL_ENABLED=true(obs 프로필)일 때만 한다.
+  tracing:
+    sampling:
+      probability: 1.0
+    export:
+      otlp:
+        enabled: ${OTEL_ENABLED:false}
+  opentelemetry:
+    resource-attributes:
+      service.instance.id: ${HOSTNAME:local}
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_ENDPOINT:http://localhost:4318}/v1/traces
+  otlp:
+    metrics:
+      export:
+        enabled: ${OTEL_ENABLED:false}
+        url: ${OTEL_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 15s
+    logging:
+      export:
+        enabled: false
 
 chat:
   message:
