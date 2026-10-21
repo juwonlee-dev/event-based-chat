@@ -4,6 +4,7 @@ import com.eventchat.domain.session.SessionCommand.End;
 import com.eventchat.domain.session.SessionCommand.Join;
 import com.eventchat.domain.session.SessionCommand.Leave;
 import com.eventchat.domain.session.SessionCommand.Message;
+import com.eventchat.domain.session.SessionCommand.Presence;
 import com.eventchat.domain.session.SessionCommand.ReadCursor;
 import com.eventchat.domain.session.SessionCommand.Typing;
 import com.eventchat.domain.session.SessionState.Participant;
@@ -28,6 +29,7 @@ import java.util.UUID;
  * </pre>
  * 참여자 확인(NOT_PARTICIPANT, PARTICIPANT_LEFT)이 상태 확인보다 먼저다.
  * 메시지·typing·읽음 커서는 IN_PROGRESS에서만 받고, typing·읽음은 같은 상태의 반복이면 저장하지 않는다.
+ * 연결 상태(presence)도 IN_PROGRESS에서만, 상태가 실제로 바뀔 때만 기록한다.
  */
 public final class SessionDecider {
 
@@ -54,6 +56,7 @@ public final class SessionDecider {
             case Message message -> message(state, message);
             case Typing typing -> typing(state, typing, policy);
             case ReadCursor read -> read(state, read, policy);
+            case Presence presence -> presence(state, presence);
         };
     }
 
@@ -70,7 +73,7 @@ public final class SessionDecider {
         return new Decision.Accepted(List.of(
                 new NewEvent(EventType.JOIN, command.actorId(),
                         joinPayload(command.role(), command.category(), command.displayName()), true),
-                statusChanged(transition, null, false)), transition);
+                statusChanged(transition, null, command.presenceBaseline(), false)), transition);
     }
 
     private static Decision leave(SessionState state, Leave command) {
@@ -84,7 +87,7 @@ public final class SessionDecider {
         Transition transition = new Transition(state.status(), SessionStatus.SUSPENDED, TransitionReason.LEFT);
         return new Decision.Accepted(List.of(
                 new NewEvent(EventType.LEAVE, command.actorId(), Map.of(), true),
-                statusChanged(transition, null, false)), transition);
+                statusChanged(transition, null, null, false)), transition);
     }
 
     private static Decision end(SessionState state, End command) {
@@ -100,7 +103,7 @@ public final class SessionDecider {
         }
         Transition transition = new Transition(SessionStatus.IN_PROGRESS, SessionStatus.COMPLETED,
                 TransitionReason.ENDED);
-        return new Decision.Accepted(List.of(statusChanged(transition, command.actorId(), true)), transition);
+        return new Decision.Accepted(List.of(statusChanged(transition, command.actorId(), null, true)), transition);
     }
 
     /** 본문은 payload.content로 넘기고, 저장할 때 별도 컬럼으로 옮긴다. 멱등 키(clientEventId)는 필수다. */
@@ -152,6 +155,21 @@ public final class SessionDecider {
                 Map.of("upToSeq", upToSeq), false)), null);
     }
 
+    /**
+     * 진행 중인 세션의 참여자에게만, 이미 반영한 것보다 새 버전이면서 상태가 실제로 바뀌었을 때만 기록한다.
+     * 늦게 온 신호가 이후 상태를 덮지 못하고, 같은 상태의 반복(Redis 재시작 뒤 재등록 등)도 걸러진다.
+     * 서버가 만든 명령이라 거절하지 않고 저장만 하지 않는다.
+     */
+    private static Decision presence(SessionState state, Presence command) {
+        Optional<Participant> self = state.participant(command.userId());
+        if (state.status() != SessionStatus.IN_PROGRESS || self.isEmpty() || self.get().left()
+                || command.ver() <= self.get().presenceVer() || command.status() == self.get().presence()) {
+            return new Decision.Suppressed();
+        }
+        EventType type = command.status() == PresenceStatus.ONLINE ? EventType.RECONNECT : EventType.DISCONNECT;
+        return new Decision.Accepted(List.of(new NewEvent(type, command.userId(), command.detail(), false)), null);
+    }
+
     private static Optional<Rejection> checkActive(SessionState state, UUID actorId) {
         Optional<Rejection> notAllowed = checkParticipant(state, actorId);
         if (notAllowed.isPresent()) {
@@ -172,13 +190,20 @@ public final class SessionDecider {
         return self.get().left() ? Optional.of(Rejection.PARTICIPANT_LEFT) : Optional.empty();
     }
 
-    private static NewEvent statusChanged(Transition transition, UUID endedBy, boolean keyed) {
+    private static NewEvent statusChanged(Transition transition, UUID endedBy,
+            Map<UUID, PresenceSnapshot> presenceBaseline, boolean keyed) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("from", transition.from().name());
         payload.put("to", transition.to().name());
         payload.put("reason", transition.reason().name());
         if (endedBy != null) {
             payload.put("endedBy", endedBy.toString());
+        }
+        if (presenceBaseline != null) {
+            Map<String, Object> baseline = new LinkedHashMap<>();
+            presenceBaseline.forEach((userId, snapshot) -> baseline.put(userId.toString(),
+                    Map.of("state", snapshot.status().name(), "ver", snapshot.ver())));
+            payload.put("presenceBaseline", baseline);
         }
         return new NewEvent(EventType.SESSION_STATUS_CHANGED, null, payload, keyed);
     }

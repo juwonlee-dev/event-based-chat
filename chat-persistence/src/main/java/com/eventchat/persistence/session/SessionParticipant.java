@@ -1,5 +1,6 @@
 package com.eventchat.persistence.session;
 
+import com.eventchat.domain.session.PresenceStatus;
 import com.eventchat.domain.user.Category;
 import com.eventchat.domain.user.Role;
 import com.eventchat.persistence.AssignedIdEntity;
@@ -63,6 +64,14 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
     @Column(name = "left_at")
     private Instant leftAt;
 
+    /** 마지막으로 반영한 연결 상태와 그 버전. 이보다 오래된 버전의 신호는 버린다. */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private PresenceStatus presence;
+
+    @Column(name = "presence_ver", nullable = false)
+    private long presenceVer;
+
     /** 입력 중이면 마지막으로 저장한 TYPING_STARTED의 seq·시각, 아니면 null. */
     @Column(name = "typing_seq")
     private Long typingSeq;
@@ -90,6 +99,7 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
         participant.active = true;
         participant.joinSeq = seq;
         participant.joinedAt = at;
+        participant.presence = PresenceStatus.OFFLINE;
         return participant;
     }
 
@@ -124,6 +134,11 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
         this.readSeq = upToSeq;
         this.readMsgNo = msgNo;
         this.lastReadStoreAt = at;
+    }
+
+    public void updatePresence(PresenceStatus status, long ver) {
+        this.presence = status;
+        this.presenceVer = ver;
     }
 
     public void deactivate() {

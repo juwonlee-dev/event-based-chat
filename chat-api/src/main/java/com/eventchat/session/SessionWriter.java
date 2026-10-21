@@ -4,6 +4,7 @@ import com.eventchat.domain.session.Decision;
 import com.eventchat.domain.session.EventType;
 import com.eventchat.domain.session.IngestPolicy;
 import com.eventchat.domain.session.NewEvent;
+import com.eventchat.domain.session.PresenceSnapshot;
 import com.eventchat.domain.session.SessionCommand;
 import com.eventchat.domain.session.SessionDecider;
 import com.eventchat.domain.session.SessionState;
@@ -20,6 +21,7 @@ import com.eventchat.persistence.session.SessionParticipant;
 import com.eventchat.persistence.session.SessionParticipantRepository;
 import com.eventchat.persistence.user.AppUser;
 import com.eventchat.persistence.user.AppUserRepository;
+import com.eventchat.presence.PresenceSnapshots;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
 import com.eventchat.worker.SnapshotTopics;
@@ -31,6 +33,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -38,6 +41,7 @@ import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -55,6 +59,7 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 트랜잭션 안에서는 외부 I/O를 하지 않는다. 저장한 이벤트는 커밋된 뒤 실시간 채널로 나간다
  * ({@link SessionEventsCommitted}). 멱등 재전송이면 처음 이벤트를 다시 내보낸다.
  */
+@Slf4j
 @Service
 public class SessionWriter {
 
@@ -72,12 +77,13 @@ public class SessionWriter {
     private final SessionParticipantRepository participants;
     private final SessionEventRepository events;
     private final EventOutboxRepository outbox;
+    private final PresenceSnapshots presenceSnapshots;
 
     public SessionWriter(PlatformTransactionManager transactionManager, WriteProperties properties,
             IngestProperties ingestProperties, MeterRegistry meters, ApplicationEventPublisher eventPublisher,
             AppUserRepository users,
             ChatSessionRepository sessions, SessionParticipantRepository participants,
-            SessionEventRepository events, EventOutboxRepository outbox) {
+            SessionEventRepository events, EventOutboxRepository outbox, PresenceSnapshots presenceSnapshots) {
         this.tx = new TransactionTemplate(transactionManager);
         this.permits = new Semaphore(properties.maxConcurrentPerNode());
         this.policy = ingestProperties.toPolicy();
@@ -88,6 +94,7 @@ public class SessionWriter {
         this.participants = participants;
         this.events = events;
         this.outbox = outbox;
+        this.presenceSnapshots = presenceSnapshots;
     }
 
     public CreateResult create(UUID actorId, String title, String idempotencyKey) {
@@ -107,10 +114,18 @@ public class SessionWriter {
         });
     }
 
-    /** 참여·퇴장·종료. 같은 멱등 키로 다시 오면 상태 판정 없이 현재 세션을 돌려준다. */
+    /**
+     * 참여·퇴장·종료. 같은 멱등 키로 다시 오면 상태 판정 없이 현재 세션을 돌려준다.
+     * 참여는 두 사람의 연결 상태를 트랜잭션 전에 읽어 진행 중 전이에 함께 기록하고(presenceBaseline),
+     * 커밋 뒤 다시 읽어 그 사이에 바뀌었으면 그 전이를 기록한다.
+     */
     public SessionView execute(UUID sessionId, UUID actorId, CommandType type, String idempotencyKey) {
+        Map<UUID, PresenceSnapshot> baseline = type == CommandType.JOIN ? presenceBaseline(sessionId, actorId) : null;
         Outcome outcome = write(sessionId, actorId, idempotencyKey, requestHash(type.name(), ""), null,
-                (actor, at) -> command(type, actor));
+                (actor, at) -> command(type, actor, baseline));
+        if (baseline != null && outcome.result() == Result.APPLIED) {
+            recheckPresence(sessionId, baseline);
+        }
         return SessionView.of(outcome.session(), outcome.participants());
     }
 
@@ -134,6 +149,40 @@ public class SessionWriter {
         return ingested(EventType.READ_CURSOR, outcome);
     }
 
+    /**
+     * 연결 상태 전이를 이 세션에 반영한다. 이미 반영한 버전보다 새 신호일 때만 받아들이고(늦게 온 신호는 버림),
+     * 상태가 실제로 바뀌었을 때만 DISCONNECT·RECONNECT를 남긴다. 상태가 같으면 버전만 올린다.
+     *
+     * @return 이벤트를 남겼으면 true
+     */
+    public boolean presence(UUID sessionId, SessionCommand.Presence command) {
+        return withPermit(() -> tx.execute(status -> {
+            ChatSession session = sessions.findForUpdate(sessionId).orElseThrow(SessionErrors::notFound);
+            List<SessionParticipant> current = participants.findBySessionIdOrderByJoinSeq(sessionId);
+            Instant at = latest(sessions.clockTimestamp(), session.getLastEventAt());
+            Decision decision = SessionDecider.decide(state(session, current), command, policy);
+            Optional<SessionParticipant> self = current.stream()
+                    .filter(p -> p.getUserId().equals(command.userId()))
+                    .findFirst();
+            self.filter(p -> command.ver() > p.getPresenceVer())
+                    .ifPresent(p -> p.updatePresence(command.status(), command.ver()));
+            if (!(decision instanceof Decision.Accepted accepted)) {
+                return false;
+            }
+            NewEvent event = accepted.events().getFirst();
+            long seqBefore = session.getLastSeq();
+            SessionEvent saved = events.save(SessionEvent.of(sessionId, session.nextSeq(at), event.type(), null,
+                    event.subjectId(), null, null, event.payload(), null, null, at, null));
+            if (event.type() == EventType.DISCONNECT) {
+                // 연결이 끊기면 입력도 멈춘 것으로 본다(복원 규칙과 같다).
+                self.orElseThrow().stopTyping();
+            }
+            requestSnapshotIfNeeded(session, seqBefore, null);
+            committed(sessionId, List.of(saved));
+            return true;
+        }));
+    }
+
     private Outcome write(UUID sessionId, UUID actorId, String idempotencyKey, byte[] requestHash,
             Instant clientTime, BiFunction<AppUser, Instant, SessionCommand> commandOf) {
         return withPermit(() -> tx.execute(status -> {
@@ -151,7 +200,8 @@ public class SessionWriter {
             }
 
             Instant at = latest(sessions.clockTimestamp(), session.getLastEventAt());
-            return switch (SessionDecider.decide(state(session, current), commandOf.apply(actor, at), policy)) {
+            SessionCommand command = commandOf.apply(actor, at);
+            return switch (SessionDecider.decide(state(session, current), command, policy)) {
                 case Decision.Rejected rejected -> throw SessionErrors.rejected(rejected.reason(), session.getStatus());
                 case Decision.Suppressed suppressed -> new Outcome(session, current, Result.SUPPRESSED, List.of());
                 case Decision.Accepted accepted -> {
@@ -160,6 +210,12 @@ public class SessionWriter {
                             requestHash, at, clientTime, current);
                     if (accepted.transition() != null) {
                         applyTransition(session, accepted.transition(), at, current);
+                    }
+                    if (command instanceof SessionCommand.Join join) {
+                        current.forEach(p -> {
+                            PresenceSnapshot snapshot = join.presenceBaseline().get(p.getUserId());
+                            p.updatePresence(snapshot.status(), snapshot.ver());
+                        });
                     }
                     requestSnapshotIfNeeded(session, seqBefore, accepted.transition());
                     committed(sessionId, appended);
@@ -256,6 +312,29 @@ public class SessionWriter {
         }
     }
 
+    /** 참여 직전 연결 상태. 참여자는 생성자 한 명뿐이지만 목록으로 읽는다. */
+    private Map<UUID, PresenceSnapshot> presenceBaseline(UUID sessionId, UUID actorId) {
+        LinkedHashSet<UUID> userIds = new LinkedHashSet<>();
+        participants.findBySessionIdOrderByJoinSeq(sessionId).forEach(p -> userIds.add(p.getUserId()));
+        userIds.add(actorId);
+        return presenceSnapshots.read(userIds);
+    }
+
+    /** 참여 트랜잭션 도중에 일어난 전이는 기록 대상 세션 조회에서 빠졌을 수 있다. 버전이 바뀌었으면 여기서 기록한다. */
+    private void recheckPresence(UUID sessionId, Map<UUID, PresenceSnapshot> baseline) {
+        presenceSnapshots.read(baseline.keySet()).forEach((userId, now) -> {
+            if (now.ver() == baseline.get(userId).ver()) {
+                return;
+            }
+            try {
+                presence(sessionId, new SessionCommand.Presence(userId, now.status(), now.ver(),
+                        Map.of("reason", "RECONCILED")));
+            } catch (RuntimeException e) {
+                log.warn("presence recheck failed: session={} user={}", sessionId, userId, e);
+            }
+        });
+    }
+
     private void committed(UUID sessionId, List<SessionEvent> sessionEvents) {
         eventPublisher.publishEvent(new SessionEventsCommitted(sessionId,
                 sessionEvents.stream().map(SessionEventRow::of).toList()));
@@ -283,7 +362,7 @@ public class SessionWriter {
     private static SessionState state(ChatSession session, List<SessionParticipant> sessionParticipants) {
         return new SessionState(session.getStatus(), session.getLastSeq(), sessionParticipants.stream()
                 .map(p -> new SessionState.Participant(p.getUserId(), p.isLeft(), p.getTypingAt(), p.getReadSeq(),
-                        p.getLastReadStoreAt()))
+                        p.getLastReadStoreAt(), p.getPresence(), p.getPresenceVer()))
                 .toList());
     }
 
@@ -296,10 +375,11 @@ public class SessionWriter {
         return actor;
     }
 
-    private static SessionCommand command(CommandType type, AppUser actor) {
+    private static SessionCommand command(CommandType type, AppUser actor,
+            Map<UUID, PresenceSnapshot> presenceBaseline) {
         return switch (type) {
             case JOIN -> new SessionCommand.Join(actor.getId(), actor.getRole(), actor.getCategory(),
-                    actor.getDisplayName());
+                    actor.getDisplayName(), presenceBaseline);
             case LEAVE -> new SessionCommand.Leave(actor.getId());
             case END -> new SessionCommand.End(actor.getId());
         };

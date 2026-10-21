@@ -1,5 +1,6 @@
 package com.eventchat.session;
 
+import com.eventchat.domain.session.PresenceStatus;
 import com.eventchat.domain.session.SessionStatus;
 import com.eventchat.domain.session.TransitionReason;
 import com.eventchat.domain.user.Category;
@@ -25,11 +26,11 @@ public record SessionView(UUID id, String title, Category category, SessionStatu
     }
 
     public record ParticipantView(UUID userId, String displayName, Role role, Category category,
-            ParticipantState state, Instant joinedAt, Instant leftAt) {
+            ParticipantState state, Instant joinedAt, Instant leftAt, PresenceStatus presence) {
 
         static ParticipantView of(SessionParticipant p) {
             return new ParticipantView(p.getUserId(), p.getDisplayName(), p.getRole(), p.getCategory(),
-                    ParticipantState.of(p), p.getJoinedAt(), p.getLeftAt());
+                    ParticipantState.of(p), p.getJoinedAt(), p.getLeftAt(), p.getPresence());
         }
     }
 
