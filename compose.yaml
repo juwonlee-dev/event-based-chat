@@ -109,6 +109,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       KAFKA_BOOTSTRAP: kafka:9092
       JWT_SECRET: ${JWT_SECRET:?}
+      # obs 프로필(lgtm)을 켤 때 true로 둔다. false면 추적·지표를 만들기만 하고 내보내지 않는다.
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_ENDPOINT: http://lgtm:4318
       SPRING_PROFILES_ACTIVE: local
     depends_on:
       postgres:
@@ -136,6 +139,21 @@ services:
     stop_grace_period: 45s
     mem_limit: 1536m
     cpus: 4
+    logging: *default-logging
+
+  # 관측(선택): OTEL_ENABLED=true docker compose --profile obs up -d
+  # Grafana http://127.0.0.1:3000 (대시보드 "Event-based Chat", 알림 규칙 폴더 "chat")
+  lgtm:
+    image: grafana/otel-lgtm:0.37.0
+    profiles: ["obs"]
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:4318:4318"
+    volumes:
+      - ./docker/grafana/dashboards.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/chat.yaml:ro
+      - ./docker/grafana/dashboards:/otel-lgtm/chat-dashboards:ro
+      - ./docker/grafana/alerts.yaml:/otel-lgtm/grafana/conf/provisioning/alerting/chat.yaml:ro
+    mem_limit: 1536m
     logging: *default-logging
 
 volumes:
