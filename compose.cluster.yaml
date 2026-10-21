@@ -1,0 +1,28 @@
+# 앱 여러 대 + nginx. 기본 compose.yaml 위에 겹쳐 쓴다.
+#   docker compose -f compose.yaml -f compose.cluster.yaml up -d --build --scale app=3
+# 여러 대가 같은 호스트 포트를 열 수 없으므로 앱 포트는 닫고 nginx(127.0.0.1:8000)로만 접근한다.
+# 인스턴스별 Actuator는 docker compose exec app curl localhost:8081/... 로 본다.
+services:
+  app:
+    ports: !reset []
+
+  nginx:
+    image: nginx:1.30.6-alpine
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    restart: unless-stopped
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
