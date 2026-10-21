@@ -107,6 +107,8 @@ services:
       REDIS_USER: ${REDIS_USER}
       REDIS_PASSWORD: ${REDIS_PASSWORD}
       KAFKA_BOOTSTRAP: kafka:9092
+      JWT_SECRET: ${JWT_SECRET:?}
+      SPRING_PROFILES_ACTIVE: local
     depends_on:
       postgres:
         condition: service_healthy
