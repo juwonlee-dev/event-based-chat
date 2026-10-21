@@ -66,6 +66,20 @@ chat:
     typing-ttl: 10s
     typing-min-store-interval: 3s
     read-min-store-interval: 1s
+  stomp:
+    server-heartbeat: 10s
+    client-heartbeat: 5s
+    max-heartbeat: 10s
+    max-connections-per-user-per-node: 5
+    message-size-limit: 64KB
+    send-buffer-size-limit: 512KB
+    send-time-limit: 10s
+    time-to-first-message: 10s
+    resume-max-events: 200
+    resume-max-bytes: 256KB
+    resume-max-concurrent: 3
+    inbound-concurrency: 64
+    allowed-origins: http://localhost:*,http://127.0.0.1:*
   jwt:
     issuer: event-based-chat
     access-ttl: 30m
