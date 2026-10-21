@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: event-based-chat
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:5432/${DB_NAME:chat}
+    username: ${DB_APP_USER:chat_app}
+    password: ${DB_APP_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 1500
+  flyway:
+    user: ${DB_OWNER_USER:chat_owner}
+    password: ${DB_OWNER_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: 6379
+      username: ${REDIS_USER:chat-app}
+      password: ${REDIS_PASSWORD}
+      timeout: 500ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9094}
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  shutdown: graceful
+  forward-headers-strategy: native
+  tomcat:
+    max-connections: 5000
+    accept-count: 1000
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState
