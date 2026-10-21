@@ -80,6 +80,9 @@ chat:
     resume-max-concurrent: 3
     inbound-concurrency: 64
     allowed-origins: http://localhost:*,http://127.0.0.1:*
+  realtime:
+    health-check-interval: 5s
+    degraded-poll-interval: 5s
   jwt:
     issuer: event-based-chat
     access-ttl: 30m

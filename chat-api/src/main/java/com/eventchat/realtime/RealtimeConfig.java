@@ -1,6 +1,7 @@
 package com.eventchat.realtime;
 
 import io.lettuce.core.ClientOptions;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.data.redis.autoconfigure.LettuceClientOptionsBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -10,6 +11,7 @@ import org.springframework.data.redis.listener.PatternTopic;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
 
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(RealtimeProperties.class)
 public class RealtimeConfig {
 
     /** 끊겨 있는 동안 명령을 쌓아 두지 않는다. 오래된 명령이 재연결 뒤 늦게 실행되는 것을 막는다. */
