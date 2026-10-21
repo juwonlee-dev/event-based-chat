@@ -43,6 +43,12 @@ spring:
     problemdetails:
       enabled: true
 
+logging:
+  structured:
+    ecs:
+      service:
+        node-name: ${HOSTNAME:local}
+
 server:
   shutdown: graceful
   forward-headers-strategy: native
@@ -115,3 +121,14 @@ chat:
   refresh-token:
     ttl: 14d
     cleanup-after: 30d
+  # logback-spring.xml에서 쓴다. 파일 이름에는 호스트명이 붙는다(logs/app-{host}.log, logs/audit-{host}.log).
+  logging:
+    dir: logs
+    app:
+      max-file-size: 50MB
+      max-history: 7
+      total-size-cap: 1GB
+    audit:
+      max-file-size: 50MB
+      max-history: 30
+      total-size-cap: 500MB
