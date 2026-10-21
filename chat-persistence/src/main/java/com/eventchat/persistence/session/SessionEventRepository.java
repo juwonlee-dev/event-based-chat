@@ -5,7 +5,8 @@ import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
-public interface SessionEventRepository extends JpaRepository<SessionEvent, SessionEvent.Key> {
+public interface SessionEventRepository
+        extends JpaRepository<SessionEvent, SessionEvent.Key>, SessionEventSearchRepository {
 
     /** 멱등 키 조회. 세션 안에서 (보낸 사람, 키)는 유일하다. */
     Optional<SessionEvent> findBySessionIdAndActorIdAndClientEventId(UUID sessionId, UUID actorId,
