@@ -24,6 +24,7 @@ import com.eventchat.persistence.user.AppUserRepository;
 import com.eventchat.presence.PresenceSnapshots;
 import com.eventchat.web.error.ApiException;
 import com.eventchat.web.error.ErrorCode;
+import com.eventchat.worker.OutboxAppended;
 import com.eventchat.worker.SnapshotTopics;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.nio.charset.StandardCharsets;
@@ -309,6 +310,7 @@ public class SessionWriter {
             String sessionId = session.getId().toString();
             outbox.save(EventOutbox.of(SnapshotTopics.REQUESTS, sessionId,
                     Map.of("sessionId", sessionId, "upToSeq", session.getLastSeq())));
+            eventPublisher.publishEvent(new OutboxAppended());
         }
     }
 

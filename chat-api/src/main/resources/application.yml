@@ -31,6 +31,14 @@ spring:
       timeout: 500ms
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP:localhost:9094}
+    # 브로커가 없을 때 relay가 DB 트랜잭션을 오래 쥐지 않도록 짧게 실패한다.
+    producer:
+      properties:
+        max.block.ms: 2000
+        request.timeout.ms: 3000
+        delivery.timeout.ms: 5000
+    consumer:
+      auto-offset-reset: earliest
   mvc:
     problemdetails:
       enabled: true
@@ -69,6 +77,8 @@ chat:
     default-item-limit: 50
     max-item-limit: 200
     future-tolerance: 60s
+  outbox:
+    poll-interval: 1s
   ingest:
     typing-ttl: 10s
     typing-min-store-interval: 3s
