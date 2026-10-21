@@ -14,10 +14,11 @@ import org.springframework.util.unit.DataSize;
  * @param sendBufferSizeLimit          연결별 송신 버퍼. resume 상한(resumeMaxBytes)이 이 안에 들어가야 한다
  * @param resumeMaxEvents              SUBSCRIBE resume로 보내는 최대 건수. 넘으면 SYSTEM_RESYNC로 보충 API를 쓰게 한다
  * @param resumeMaxConcurrent          노드에서 동시에 처리하는 resume 수. 넘치면 기다리지 않고 SYSTEM_RESYNC
+ * @param drainWindow                  종료할 때 로컬 연결을 이 시간에 걸쳐 나눠 닫는다(재연결이 한꺼번에 몰리지 않도록)
  */
 @ConfigurationProperties("chat.stomp")
 public record StompProperties(Duration serverHeartbeat, Duration clientHeartbeat, Duration maxHeartbeat,
         int maxConnectionsPerUserPerNode, DataSize messageSizeLimit, DataSize sendBufferSizeLimit,
         Duration sendTimeLimit, Duration timeToFirstMessage, int resumeMaxEvents, DataSize resumeMaxBytes,
-        int resumeMaxConcurrent, int inboundConcurrency, List<String> allowedOrigins) {
+        int resumeMaxConcurrent, int inboundConcurrency, Duration drainWindow, List<String> allowedOrigins) {
 }

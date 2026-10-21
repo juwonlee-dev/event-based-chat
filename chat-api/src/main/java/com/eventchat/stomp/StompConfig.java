@@ -2,6 +2,7 @@ package com.eventchat.stomp;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
@@ -31,13 +32,16 @@ public class StompConfig implements WebSocketMessageBrokerConfigurer {
     private final StompProperties properties;
     private final StompInboundInterceptor inboundInterceptor;
     private final StompErrorHandler errorHandler;
+    private final StompConnections connections;
     private final TaskScheduler stompTaskScheduler;
 
     public StompConfig(StompProperties properties, StompInboundInterceptor inboundInterceptor,
-            StompErrorHandler errorHandler, @Qualifier("stompTaskScheduler") TaskScheduler stompTaskScheduler) {
+            StompErrorHandler errorHandler, StompConnections connections,
+            @Qualifier("stompTaskScheduler") TaskScheduler stompTaskScheduler) {
         this.properties = properties;
         this.inboundInterceptor = inboundInterceptor;
         this.errorHandler = errorHandler;
+        this.connections = connections;
         this.stompTaskScheduler = stompTaskScheduler;
     }
 
@@ -72,7 +76,14 @@ public class StompConfig implements WebSocketMessageBrokerConfigurer {
         registration.setMessageSizeLimit((int) properties.messageSizeLimit().toBytes())
                 .setSendBufferSizeLimit((int) properties.sendBufferSizeLimit().toBytes())
                 .setSendTimeLimit((int) properties.sendTimeLimit().toMillis())
-                .setTimeToFirstMessage((int) properties.timeToFirstMessage().toMillis());
+                .setTimeToFirstMessage((int) properties.timeToFirstMessage().toMillis())
+                .addDecoratorFactory(connections::decorate);
+    }
+
+    /** 드레이닝({@link StompDrainer})이 먼저 연결을 닫은 뒤에 브로커·WebSocket 핸들러가 멈추도록 한 단계 늦춘다. */
+    @Override
+    public Integer getPhase() {
+        return SmartLifecycle.DEFAULT_PHASE - 512;
     }
 
     /** heartbeat, 토큰 만료 종료, 드레이닝 예약에 쓴다. */

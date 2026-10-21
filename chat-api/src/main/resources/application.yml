@@ -79,6 +79,7 @@ chat:
     resume-max-bytes: 256KB
     resume-max-concurrent: 3
     inbound-concurrency: 64
+    drain-window: 10s
     allowed-origins: http://localhost:*,http://127.0.0.1:*
   realtime:
     health-check-interval: 5s

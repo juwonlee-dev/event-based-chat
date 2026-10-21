@@ -11,6 +11,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.WebSocketHandler;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.WebSocketHandlerDecorator;
 import org.springframework.web.socket.messaging.SessionDisconnectEvent;
 
 /**
@@ -18,7 +22,7 @@ import org.springframework.web.socket.messaging.SessionDisconnectEvent;
  * <ul>
  *   <li>사용자별 동시 연결 수 제한(노드 메모리로 센다)</li>
  *   <li>접근 토큰 만료 시각에 ERROR AUTH_TOKEN_EXPIRED로 닫기</li>
- *   <li>강제 종료(AUTH_REVOKED)</li>
+ *   <li>강제 종료(AUTH_REVOKED), 종료 시 드레이닝</li>
  * </ul>
  */
 @Component
@@ -26,6 +30,8 @@ public class StompConnections {
 
     private final Map<String, Connection> connections = new ConcurrentHashMap<>();
     private final Map<UUID, Set<String>> byUser = new ConcurrentHashMap<>();
+    /** 드레이닝 때 1012로 닫으려고 원래 WebSocket 세션을 따로 들고 있는다. */
+    private final Map<String, WebSocketSession> sockets = new ConcurrentHashMap<>();
     private final StompProperties properties;
     private final TaskScheduler scheduler;
     private final StompDelivery delivery;
@@ -79,6 +85,10 @@ public class StompConnections {
         return sessions.size();
     }
 
+    List<WebSocketSession> openSockets() {
+        return List.copyOf(sockets.values());
+    }
+
     @EventListener
     void onDisconnect(SessionDisconnectEvent event) {
         Connection connection = connections.remove(event.getSessionId());
@@ -91,6 +101,22 @@ public class StompConnections {
             sessions.remove(event.getSessionId());
             return sessions.isEmpty() ? null : sessions;
         });
+    }
+
+    WebSocketHandler decorate(WebSocketHandler handler) {
+        return new WebSocketHandlerDecorator(handler) {
+            @Override
+            public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+                sockets.put(session.getId(), session);
+                super.afterConnectionEstablished(session);
+            }
+
+            @Override
+            public void afterConnectionClosed(WebSocketSession session, CloseStatus closeStatus) throws Exception {
+                sockets.remove(session.getId());
+                super.afterConnectionClosed(session, closeStatus);
+            }
+        };
     }
 
     private record Connection(StompPrincipal principal, ScheduledFuture<?> expiry, Map<String, UUID> subscriptions) {
