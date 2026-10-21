@@ -1,18 +1,17 @@
 package com.eventchat.security;
 
+import com.eventchat.persistence.auth.RefreshToken;
+import com.eventchat.persistence.auth.RefreshTokenRepository;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,93 +31,64 @@ public class RefreshTokenService {
 
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    private final JdbcClient jdbc;
+    private final RefreshTokenRepository tokens;
     private final RefreshTokenProperties properties;
 
+    @Transactional
     public Issued issue(UUID userId, ClientInfo client) {
         String raw = newRawToken();
         Instant expiresAt = Instant.now().plus(properties.ttl());
-        insert(userId, UUID.randomUUID(), raw, expiresAt, client);
+        tokens.save(RefreshToken.issue(userId, UUID.randomUUID(), hash(raw), expiresAt, client.userAgent(), client.ip()));
         return new Issued(raw, expiresAt);
     }
 
     /** 레이트 리밋 키를 정하려고 잠금 없이 소유자만 미리 조회한다. */
+    @Transactional(readOnly = true)
     public Optional<UUID> findOwner(String raw) {
-        return jdbc.sql("SELECT user_id FROM refresh_token WHERE token_hash = ?")
-                .param(hash(raw))
-                .query(UUID.class)
-                .optional();
+        return tokens.findOwnerByTokenHash(hash(raw));
     }
 
     @Transactional
     public RotationResult rotate(String raw, ClientInfo client) {
-        Optional<StoredToken> found = jdbc.sql("""
-                        SELECT id, user_id, family_id, expires_at, used_at, revoked_at
-                        FROM refresh_token WHERE token_hash = ? FOR UPDATE""")
-                .param(hash(raw))
-                .query(StoredToken.class)
-                .optional();
+        Optional<RefreshToken> found = tokens.findByTokenHash(hash(raw));
         if (found.isEmpty()) {
             return new RotationResult.Invalid();
         }
-        StoredToken token = found.get();
-        if (token.usedAt() != null) {
+        RefreshToken token = found.get();
+        Instant now = Instant.now();
+        if (token.isUsed()) {
             // 이미 회전된 토큰의 재사용: 탈취로 본다. 예외를 던지지 않아야 폐기가 커밋된다.
-            revokeFamily(token.familyId());
-            return new RotationResult.Reused(token.userId());
+            tokens.revokeFamily(token.getFamilyId(), now);
+            return new RotationResult.Reused(token.getUserId());
         }
-        if (token.revokedAt() != null || !token.expiresAt().toInstant().isAfter(Instant.now())) {
+        if (!token.isUsable(now)) {
             return new RotationResult.Invalid();
         }
         String next = newRawToken();
-        Instant expiresAt = token.expiresAt().toInstant();
-        UUID nextId = insert(token.userId(), token.familyId(), next, expiresAt, client);
-        jdbc.sql("UPDATE refresh_token SET used_at = now(), revoked_at = now(), replaced_by = ? WHERE id = ?")
-                .params(nextId, token.id())
-                .update();
-        return new RotationResult.Rotated(token.userId(), new Issued(next, expiresAt));
+        RefreshToken rotated = tokens.save(RefreshToken.issue(token.getUserId(), token.getFamilyId(), hash(next),
+                token.getExpiresAt(), client.userAgent(), client.ip()));
+        token.replaceWith(rotated.getId(), now);
+        return new RotationResult.Rotated(token.getUserId(), new Issued(next, token.getExpiresAt()));
     }
 
     /** 로그아웃: 이 토큰이 속한 계열을 폐기한다. 다른 사용자의 토큰이면 아무것도 하지 않는다. */
+    @Transactional
     public void revokeFamilyOf(String raw, UUID userId) {
-        jdbc.sql("""
-                        UPDATE refresh_token SET revoked_at = now()
-                        WHERE revoked_at IS NULL
-                          AND family_id = (SELECT family_id FROM refresh_token WHERE token_hash = ? AND user_id = ?)""")
-                .params(hash(raw), userId)
-                .update();
+        tokens.revokeFamilyOf(hash(raw), userId, Instant.now());
     }
 
+    @Transactional
     public int revokeAll(UUID userId) {
-        return jdbc.sql("UPDATE refresh_token SET revoked_at = now() WHERE user_id = ? AND revoked_at IS NULL")
-                .param(userId)
-                .update();
+        return tokens.revokeAllOf(userId, Instant.now());
     }
 
+    @Transactional
     @Scheduled(fixedDelayString = "PT1H", initialDelayString = "PT1M")
     public void deleteStale() {
-        Timestamp threshold = Timestamp.from(Instant.now().minus(properties.cleanupAfter()));
-        int deleted = jdbc.sql("DELETE FROM refresh_token WHERE expires_at < ? OR revoked_at < ?")
-                .params(threshold, threshold)
-                .update();
+        int deleted = tokens.deleteStale(Instant.now().minus(properties.cleanupAfter()));
         if (deleted > 0) {
             log.info("deleted {} stale refresh tokens", deleted);
         }
-    }
-
-    private void revokeFamily(UUID familyId) {
-        jdbc.sql("UPDATE refresh_token SET revoked_at = now() WHERE family_id = ? AND revoked_at IS NULL")
-                .param(familyId)
-                .update();
-    }
-
-    private UUID insert(UUID userId, UUID familyId, String raw, Instant expiresAt, ClientInfo client) {
-        return jdbc.sql("""
-                        INSERT INTO refresh_token (user_id, family_id, token_hash, expires_at, user_agent, ip)
-                        VALUES (?, ?, ?, ?, ?, ?) RETURNING id""")
-                .params(userId, familyId, hash(raw), Timestamp.from(expiresAt), client.userAgent(), client.ip())
-                .query(UUID.class)
-                .single();
     }
 
     private static String newRawToken() {
@@ -136,10 +106,6 @@ public class RefreshTokenService {
     }
 
     public record Issued(String value, Instant expiresAt) {
-    }
-
-    private record StoredToken(UUID id, UUID userId, UUID familyId, OffsetDateTime expiresAt,
-            OffsetDateTime usedAt, OffsetDateTime revokedAt) {
     }
 
     public sealed interface RotationResult {
