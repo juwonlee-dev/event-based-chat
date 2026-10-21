@@ -21,7 +21,7 @@ public record EventView(long seq, UUID eventId, UUID sessionId, EventType type, 
         String clientEventId, Instant serverTime, Integer msgNo, Map<String, Object> payload, Long ttlMs,
         Instant expiresAt, Instant clientTime, Integer schemaVersion) {
 
-    static EventView of(SessionEventRow row, Duration typingTtl) {
+    public static EventView of(SessionEventRow row, Duration typingTtl) {
         return of(row, typingTtl, false);
     }
 

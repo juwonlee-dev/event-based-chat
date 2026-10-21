@@ -15,6 +15,7 @@ import com.eventchat.persistence.session.EventOutbox;
 import com.eventchat.persistence.session.EventOutboxRepository;
 import com.eventchat.persistence.session.SessionEvent;
 import com.eventchat.persistence.session.SessionEventRepository;
+import com.eventchat.persistence.session.SessionEventRow;
 import com.eventchat.persistence.session.SessionParticipant;
 import com.eventchat.persistence.session.SessionParticipantRepository;
 import com.eventchat.persistence.user.AppUser;
@@ -37,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.Semaphore;
 import java.util.function.BiFunction;
 import java.util.function.Supplier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -50,7 +52,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  *   <li>세션 행을 잠그고, 멱등 키가 있으면 상태 판정보다 먼저 조회한다.</li>
  *   <li>판정한 이벤트에 seq를 이어 붙여 저장하고 세션·참여자 상태를 갱신한다.</li>
  * </ol>
- * 트랜잭션 안에서는 외부 I/O를 하지 않는다.
+ * 트랜잭션 안에서는 외부 I/O를 하지 않는다. 저장한 이벤트는 커밋된 뒤 실시간 채널로 나간다
+ * ({@link SessionEventsCommitted}). 멱등 재전송이면 처음 이벤트를 다시 내보낸다.
  */
 @Service
 public class SessionWriter {
@@ -63,6 +66,7 @@ public class SessionWriter {
     private final Semaphore permits;
     private final IngestPolicy policy;
     private final MeterRegistry meters;
+    private final ApplicationEventPublisher eventPublisher;
     private final AppUserRepository users;
     private final ChatSessionRepository sessions;
     private final SessionParticipantRepository participants;
@@ -70,13 +74,15 @@ public class SessionWriter {
     private final EventOutboxRepository outbox;
 
     public SessionWriter(PlatformTransactionManager transactionManager, WriteProperties properties,
-            IngestProperties ingestProperties, MeterRegistry meters, AppUserRepository users,
+            IngestProperties ingestProperties, MeterRegistry meters, ApplicationEventPublisher eventPublisher,
+            AppUserRepository users,
             ChatSessionRepository sessions, SessionParticipantRepository participants,
             SessionEventRepository events, EventOutboxRepository outbox) {
         this.tx = new TransactionTemplate(transactionManager);
         this.permits = new Semaphore(properties.maxConcurrentPerNode());
         this.policy = ingestProperties.toPolicy();
         this.meters = meters;
+        this.eventPublisher = eventPublisher;
         this.users = users;
         this.sessions = sessions;
         this.participants = participants;
@@ -139,6 +145,7 @@ public class SessionWriter {
                         events.findBySessionIdAndActorIdAndClientEventId(sessionId, actorId, idempotencyKey);
                 if (previous.isPresent()) {
                     checkSameRequest(previous.get(), requestHash);
+                    committed(sessionId, List.of(previous.get()));
                     return new Outcome(session, current, Result.REPLAYED, List.of(previous.get()));
                 }
             }
@@ -155,6 +162,7 @@ public class SessionWriter {
                         applyTransition(session, accepted.transition(), at, current);
                     }
                     requestSnapshotIfNeeded(session, seqBefore, accepted.transition());
+                    committed(sessionId, appended);
                     yield new Outcome(session, current, Result.APPLIED, appended);
                 }
             };
@@ -172,8 +180,8 @@ public class SessionWriter {
         Instant now = sessions.clockTimestamp();
         ChatSession session = sessions.save(ChatSession.create(title, actor.getCategory(), actorId, now));
         List<SessionParticipant> joined = new ArrayList<>();
-        append(session, actor, SessionDecider.create(actorId, actor.getRole(), actor.getCategory(),
-                actor.getDisplayName(), title), idempotencyKey, requestHash, now, null, joined);
+        committed(session.getId(), append(session, actor, SessionDecider.create(actorId, actor.getRole(),
+                actor.getCategory(), actor.getDisplayName(), title), idempotencyKey, requestHash, now, null, joined));
         return new CreateResult(SessionView.of(session, joined), false);
     }
 
@@ -246,6 +254,11 @@ public class SessionWriter {
             outbox.save(EventOutbox.of(SnapshotTopics.REQUESTS, sessionId,
                     Map.of("sessionId", sessionId, "upToSeq", session.getLastSeq())));
         }
+    }
+
+    private void committed(UUID sessionId, List<SessionEvent> sessionEvents) {
+        eventPublisher.publishEvent(new SessionEventsCommitted(sessionId,
+                sessionEvents.stream().map(SessionEventRow::of).toList()));
     }
 
     /** 저장하지 않고 걸러 낸 요청(재전송 중복, 같은 상태의 반복)은 지표로만 남긴다. */
