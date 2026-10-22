@@ -163,7 +163,9 @@ docker compose down -v     # 볼륨까지 삭제. 다음 기동 때 DB와 시드
 | [운영과 장애 대응](docs/operations.md) | 관측, 장애 3종의 감지 → 완화 → 복구, 수평 확장, 설정 기본값 |
 | [API](docs/api.md) | REST·STOMP 계약, 오류 코드, 클라이언트가 지켜야 할 규칙 |
 | [테스트](docs/testing.md) | 테스트 묶음, 실행 방법, 장애 주입 |
-| [확장 설계](docs/design/README.md) | 실시간 전달 수평 확장, 긴 메시지, 중앙 로그 수집 확장 |
+| [확장 설계: 실시간 전달 수평 확장](docs/design/realtime-scale-out.md) | 노드가 많아질 때 패턴 구독을 세션별 sharded Pub/Sub(Redis Cluster)로 바꾸는 설계, 전환 절차와 기준 |
+| [확장 설계: 긴 메시지](docs/design/long-message.md) | 2000자를 넘는 메시지를 위한 바이트 단위 상한, 조각 업로드·객체 저장 방안 |
+| [확장 설계: 중앙 로그 수집](docs/design/elk-logging.md) | 노드별 로그 파일을 Loki, 이후 ELK로 모으는 단계별 도입안 |
 
 ## 테스트
 

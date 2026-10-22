@@ -34,7 +34,7 @@ flowchart LR
 | Redis | 노드 사이 실시간 Pub/Sub, 사용자 연결 상태와 버전의 공유 | Pub/Sub는 보관하지 않는다. 복구 후 클라이언트가 이벤트를 DB에서 보충한다 |
 | Kafka | 스냅샷 갱신 요청의 비동기 전달과 재시도·DLT | 메시지 중복은 허용하며 스냅샷 UPSERT가 오래된 결과를 막는다 |
 | nginx | 클러스터 구성에서 HTTP와 WebSocket을 앱 노드에 분산 | 기본 설정은 연결 단위 분산이며 앱 노드 고정 세션은 요구하지 않는다 |
-| 관측 스택 | 로그 검색, 지표 대시보드·알림, 분산 추적 | `obs` 프로필에서 Prometheus·Grafana·Tempo·Loki를 올린다 |
+| 관측 스택 | 지표 대시보드·알림, 분산 추적 | `obs` 프로필에서 `grafana/otel-lgtm`(Prometheus·Grafana·Tempo·Loki)을 올린다. 로그는 아직 Loki로 보내지 않는다 |
 
 여기서 내구성 경계를 PostgreSQL로 둔 이유는 메시지 저장과 복원을 Redis/Kafka 전달 성공 여부에 종속시키지 않기 위해서다. 그 대가로 모든 쓰기는 세션 행을 잠그며, 같은 세션의 이벤트는 직렬 처리된다.
 
