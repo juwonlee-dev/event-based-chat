@@ -9,7 +9,7 @@
 | 단위 | 상태 전이, 복원 리듀서, 커서·목적지 형식 등 순수 로직 | JDK 21 | `scripts/test/unit.sh` | 수 분 |
 | 통합 | 앱과 PostgreSQL·Redis·Kafka를 띄워 REST·STOMP·presence·복원·인프라 장애 확인 | JDK 21, Docker | `scripts/test/integration.sh` | 수 분 (작성자 환경에서 약 3분) |
 | 클러스터 | nginx 뒤 앱 여러 대의 노드 간 전달과 장애 주입 | JDK 21, Docker | `scripts/test/cluster.sh` | 수 분 |
-| 전체 | 단위, 통합, 클러스터 순서 실행 | JDK 21, Docker | `scripts/test/run-all.sh` | 수 분 |
+| 전체 | 단위 → 통합 → 클러스터 순서로 실행 | JDK 21, Docker | `scripts/test/run-all.sh` | 수 분 |
 
 스크립트는 Bash이며 저장소의 Gradle Wrapper를 사용한다. Windows에서는 Git Bash에서 실행한다. 오류가 나면 종료 코드가 0이 아니며, Gradle 테스트 보고서는 `chat-*/build/reports/tests/<스위트>/index.html`에 생성된다.
 
@@ -26,7 +26,7 @@ Docker 없이 실행하는 JUnit 테스트다. 저장소에는 41개 단위 테�
 | `SessionDecider` | 세션 상태 전이, 입력 중 표시 갱신 규칙, 읽음 커서 억제, presence 전이 |
 | `SessionReducer` | 이벤트 리플레이와 기대 상태 비교, 스냅샷과 증분 리플레이, 복원 불가 입력 |
 | `RelayEnvelope`, `StompDestinations`, `SessionCursors` | 노드 간 전달 봉투, 구독 목적지 허용 목록, 목록 커서 인코딩 |
-| `ConnectionBudgetCheck` | 커넥션 풀이 쓰기·읽기·resume 동시 처리 허용량보다 작을 때 기동을 막는지 |
+| `ConnectionBudgetCheck` | 커넥션 풀이 쓰기·읽기·resume 허용량 합계에 백그라운드 몫(3)을 더한 값보다 작을 때 기동을 막는지 |
 
 ## 통합 테스트
 
@@ -53,7 +53,7 @@ Testcontainers가 PostgreSQL·Redis·Kafka를 시작한다. 별도로 Compose를
 | `RestoreIT` | 12 | 스냅샷·전체 리플레이 결과 비교, 시점 조회, 복원 불가 응답, DLT |
 | `InfraFailureIT` | 4 | Redis 재시작·응답 없음, 재시작 후 presence 등록, Kafka 중단 중 쓰기와 복구 |
 
-presence 테스트는 테스트용 짧은 시간 설정을 사용한다. 테스트 클래스 실행 순서와 공유 컨테이너를 사용하는 장애 테스트의 위치는 `junit-platform.properties`에 지정되어 있다. Kafka 장애는 재시작 대신 일시 정지로 만든다.
+presence 테스트는 테스트용 짧은 시간 설정을 사용한다. `junit-platform.properties`로 클래스 실행 순서를 `@Order` 기준으로 정하고, 공유 컨테이너를 멈추는 `InfraFailureIT`는 `@Order(Integer.MAX_VALUE)`로 맨 마지막에 돈다. Kafka 장애는 재시작 대신 일시 정지로 만든다.
 
 ## 클러스터 테스트
 
@@ -64,15 +64,15 @@ scripts/test/cluster.sh --obs        # Tempo 분산 추적 검사 추가
 scripts/test/cluster.sh --down       # 실행 후 클러스터 종료
 ```
 
-`compose.yaml`과 `compose.cluster.yaml`로 앱 3대와 nginx를 띄운다. 이미 클러스터가 떠 있으면 그대로 사용한다. 기본 검사는 서로 다른 노드에 연결한 클라이언트 사이의 양방향 메시지 전달과 100건 연속 전송을 확인한다. `--faults`는 앱 컨테이너의 `kill`, `pause`, `stop` 시나리오를 더한다. 실행 중 실패하더라도 스크립트가 종료 시 컨테이너 상태를 복구하도록 테스트 코드에 정리 절차가 있다.
+`compose.yaml`과 `compose.cluster.yaml`로 앱 3대와 nginx를 띄운다. 이미 클러스터가 떠 있으면 그대로 사용한다. 기본 검사는 서로 다른 노드에 연결한 클라이언트 사이의 양방향 메시지 전달과 100건 연속 전송을 확인한다. `--faults`는 앱 컨테이너의 `kill`, `pause`, `stop` 시나리오를 더한다. 테스트가 중간에 실패해도 `ClusterIT`가 끝날 때 멈추거나 내린 컨테이너를 되돌린다.
 
-`--obs`는 관측 프로필을 켜고 REST 요청부터 JDBC·Redis 발행, 다른 인스턴스의 전달까지 한 트레이스로 연결되는지 확인한다.
+`--obs`는 관측 프로필을 켜고 REST 요청부터 JDBC·Redis 발행, 다른 인스턴스의 전달까지 한 trace로 이어지는지 확인한다.
 
 | 시험 | 태그 | 내용 |
 |---|---|---|
 | 노드 간 전달 | 기본(태그 없음) | 다른 인스턴스에 연결한 두 클라이언트의 양방향 전달, 100건 전송의 누락 및 RESYNC 여부 |
 | 장애 주입 | `fault` | 노드 강제 종료 후 resume 및 `NODE_LOST`, 일시 정지 후 재등록, 정상 종료 시 WebSocket 1012 종료 코드 |
-| 분산 추적 | `obs` | REST 요청, JDBC, Redis 발행, 원격 노드의 실시간 전달이 한 트레이스에 있는지 |
+| 분산 추적 | `obs` | REST 요청, JDBC, Redis 발행, 원격 노드의 실시간 전달이 한 trace에 있는지 |
 
 ## 전체 실행
 

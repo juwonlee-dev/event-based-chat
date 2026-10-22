@@ -15,7 +15,7 @@ API 명세는 `springdoc`이 코드에서 생성하는 OpenAPI 3 문서로 제�
 | 내 계정 | `GET /users/me` | 인증 사용자 | 없음 |
 | 세션 생성 | `POST /sessions` | 상담원·고객 | 선택 `Idempotency-Key` |
 | 세션 목록 | `GET /sessions` | 인증 사용자 | 없음 |
-| 세션 상세 | `GET /sessions/{id}` | 참여자 또는 관리자 | 없음 |
+| 세션 상세 | `GET /sessions/{id}` | 현재 참여자 또는 관리자. `WAITING` 세션은 인증 사용자 누구나(상대를 찾을 수 있게), 퇴장한 참여자는 불가(`PARTICIPANT_LEFT`) | 없음 |
 | 참여·퇴장·종료 | `POST /sessions/{id}/join`, `/leave`, `/end` | 일반 사용자(전이는 상태 규칙 적용) | 선택 `Idempotency-Key` |
 | 이벤트 수집 | `POST /sessions/{id}/events` | 해당 세션 참여자 | 메시지는 본문 `clientEventId` |
 | 이벤트 조회 | `GET /sessions/{id}/events` | 참여자는 보충 조회, 관리자만 `from`·`to`·`types` 필터 | 없음 |
@@ -26,11 +26,13 @@ API 명세는 `springdoc`이 코드에서 생성하는 OpenAPI 3 문서로 제�
 
 | 과제 경로 | 이 구현의 경로 | 차이와 이유 |
 |---|---|---|
+| `POST /sessions` | 동일 | 선택 `Idempotency-Key`로 재전송 시 같은 세션을 돌려준다 |
 | `POST /sessions/{id}/events` | 동일 | REST와 STOMP가 같은 이벤트 처리기를 호출한다 |
 | `GET /sessions/{id}/timeline?at=...` | 동일 | `atSeq`도 지원하고, 응답에 복원 모드·해시를 포함한다 |
 | `GET /sessions` | 동일 | 날짜·상태·분류·제목·참여자 필터와 키셋 커서를 지원한다 |
-| `POST /sessions/{id}/join`, `/leave`, `/end` | 동일 | 수정 요청마다 선택 멱등 키를 받아 재전송을 안전하게 한다 |
-| 선택 스냅샷 생성 API | `POST /sessions/{id}/snapshots` | 관리자 동기 생성과 DLT 복구 경로로 제공한다 |
+| `POST /sessions/{id}/join`, `/leave`, `/end` | 동일 | 상태를 바꾸는 요청마다 선택 멱등 키를 받아, 재전송해도 한 번만 반영한다 |
+| (선택) `POST /sessions/{id}/snapshots` | 동일 | 관리자 동기 생성과 DLT 복구 경로로 제공한다 |
+| (선택) `GET /sessions/{id}/events?from=...&to=...` | 동일 | 관리자는 `from`·`to`·`types` 필터(최대 500건), 참여자는 `afterSeq` 보충 조회(최대 200건)로 쓴다 |
 
 ## 요청·응답 예시
 
@@ -79,7 +81,7 @@ Content-Type: application/json
 {"clientEventId":"web-17","type":"MESSAGE","payload":{"content":"계약 내용을 확인하겠습니다."},"clientTime":"2026-10-22T10:01:00Z"}
 ```
 
-메시지 저장은 `201`, 같은 `clientEventId` 재전송은 최초 이벤트와 함께 `200`이다. `EventView`에서는 DB의 별도 `content` 열이 응답의 `payload.content`로 합쳐진다.
+메시지 저장은 `201`, 같은 `clientEventId` 재전송은 처음 이벤트와 함께 `200`이다. `TYPING_STARTED`·`TYPING_STOPPED`는 저장하면 `201`, 같은 상태의 반복이라 저장하지 않으면 `204`(본문 없음)다. `READ_CURSOR`는 저장 여부와 관계없이 `202`이고, 저장했을 때만 본문에 이벤트를 싣는다. `EventView`에서는 DB의 별도 `content` 열이 응답의 `payload.content`로 합쳐진다.
 
 ```json
 {"seq":5,"eventId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e003","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","type":"MESSAGE","actorId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e002","clientEventId":"web-17","serverTime":"2026-10-22T10:01:00Z","msgNo":1,"payload":{"content":"계약 내용을 확인하겠습니다."}}
@@ -92,7 +94,7 @@ GET /sessions/7c90a160-2b2d-7a7f-8a6c-7a257c64e001/timeline?at=2026-10-22T10:01:
 Authorization: Bearer <accessToken>
 ```
 
-생성(seq 1)·생성자 참여(2)·고객 참여(3)·진행 전이(4)·메시지(5)가 있는 세션을 seq 5 시점으로 복원한 예다. 응답은 세션, 기준 시점, 복원 출처, 참여자 상태, 화면 이벤트를 반환한다. 예시를 짧게 하려고 `itemLimit=1`로 최신 항목 하나만 받았다. `unreadCount`는 그 시점의 메시지 수에서 각자 마지막으로 읽은 메시지 번호를 뺀 값이다. 항목이 많으면 응답의 `nextBeforeSeq`를 다음 요청의 `beforeSeq`로 전달한다.
+생성(seq 1)·생성자 참여(2)·고객 참여(3)·진행 전이(4)·메시지(5)가 있는 세션을 seq 5 시점으로 복원한 예다. 응답은 세션, 기준 시점, 복원 출처, 참여자 상태, 화면 이벤트를 반환한다. `session`은 지금의 세션 요약이고, 요청한 시점의 상태와 seq는 `asOf`와 `participants`에 담긴다. 예시를 짧게 하려고 `itemLimit=1`로 최신 항목 하나만 받았다. `unreadCount`는 그 시점의 메시지 수에서 각자 마지막으로 읽은 메시지 번호를 뺀 값이다. 메시지를 보낸 사람은 자기 메시지까지 읽은 것으로 본다. presence는 세션이 진행 상태가 된 시각부터 기록한다. 항목이 많으면 응답의 `nextBeforeSeq`를 다음 요청의 `beforeSeq`로 전달한다.
 
 ```json
 {
@@ -131,17 +133,17 @@ Authorization: Bearer <accessToken>
       "leftAt": null,
       "presence": {
         "status": "ONLINE",
-        "since": "2026-10-22T10:00:05Z"
+        "since": "2026-10-22T10:00:30Z"
       },
       "typing": {
         "active": false,
         "expiresAt": null
       },
       "readCursor": {
-        "seq": 0,
-        "at": null
+        "seq": 5,
+        "at": "2026-10-22T10:01:00Z"
       },
-      "unreadCount": 1
+      "unreadCount": 0
     },
     {
       "userId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e004",
@@ -153,7 +155,7 @@ Authorization: Bearer <accessToken>
       "leftAt": null,
       "presence": {
         "status": "ONLINE",
-        "since": "2026-10-22T10:00:31Z"
+        "since": "2026-10-22T10:00:30Z"
       },
       "typing": {
         "active": false,
@@ -190,7 +192,7 @@ Authorization: Bearer <accessToken>
 
 ## 인증과 오류
 
-REST는 `Authorization: Bearer <accessToken>`을 사용한다. access token 기본 수명은 30분, refresh token은 14일이며 갱신 토큰은 회전한다. 관리자만 스냅샷 생성과 전체 재생 비교를 할 수 있다.
+REST는 `Authorization: Bearer <accessToken>`을 사용한다. 접근 토큰 기본 수명은 30분, 갱신 토큰은 14일이며 갱신 토큰은 쓸 때마다 새로 바뀐다(회전). 관리자만 스냅샷 생성과 스냅샷 없는 전체 리플레이 비교를 할 수 있다.
 
 오류는 RFC 9457 기반 `application/problem+json`이며 확장 필드 `code`를 포함한다.
 
@@ -220,6 +222,17 @@ Authorization:Bearer <accessToken>
 ^@
 ```
 
+heart-beat는 필수다. 두 값 모두 1~10000ms여야 하고, 없거나 0이거나 10초를 넘으면 연결이 거절된다. 연결과 구독에서 거절되면 아래 코드를 담은 STOMP `ERROR` 프레임을 받고 연결이 닫힌다.
+
+| 코드 | 상황 |
+|---|---|
+| `AUTH_INVALID`, `AUTH_TOKEN_EXPIRED` | 토큰이 없거나 잘못됐거나 만료됨 |
+| `HEARTBEAT_REQUIRED` | heart-beat 미지정 또는 범위 밖 |
+| `TOO_MANY_CONNECTIONS` | 같은 사용자가 한 노드에 연결 5개 초과 |
+| `ADMIN_READ_ONLY` | 관리자는 실시간 연결 불가 |
+| `FORBIDDEN_DESTINATION` | 허용 목록 밖의 목적지(세션 UUID는 소문자만 허용) |
+| `AUTH_REVOKED` | 로그아웃으로 그 사용자의 연결을 서버가 닫음 |
+
 ### 2. 구독
 
 ```text
@@ -232,7 +245,7 @@ ack:auto
 ^@
 ```
 
-세션 topic은 참여자만 구독할 수 있다. 복구가 필요 없으면 `resume-after-seq`를 생략한다. 연결 직후에는 `/user/queue/receipts`(전송 결과, 구독 거절 `SUBSCRIBE_REJECTED`)와 `/user/queue/system`(Redis 중계 저하·회복 알림 `SYSTEM_DEGRADED`, `SYSTEM_RECOVERED`)도 구독한다.
+세션 topic은 `WAITING`·`IN_PROGRESS` 세션의 현재 참여자만 구독할 수 있다. 거절되면 연결은 유지된 채 receipts로 `SUBSCRIBE_REJECTED`(코드, 세션 상태, 마지막 seq)가 온다. 종료된 세션은 `SESSION_NOT_ACTIVE`다. 복구가 필요 없으면 `resume-after-seq`를 생략한다. 연결 직후에는 `/user/queue/receipts`(전송 결과, 구독 거절 `SUBSCRIBE_REJECTED`)와 `/user/queue/system`(Redis 중계 저하·회복 알림 `SYSTEM_DEGRADED`, `SYSTEM_RECOVERED`)도 구독한다.
 
 ### 3. 전송
 
@@ -245,11 +258,11 @@ content-type:application/json
 ^@
 ```
 
-클라이언트 전송 가능 유형은 `MESSAGE`, `TYPING_STARTED`, `TYPING_STOPPED`, `READ_CURSOR`다. 서버는 이벤트를 저장한 뒤 topic에 전달하고 요청 결과는 receipts로 보낸다.
+클라이언트 전송 가능 유형은 `MESSAGE`, `TYPING_STARTED`, `TYPING_STOPPED`, `READ_CURSOR`다. 서버는 이벤트를 저장한 뒤 topic에 전달하고 요청 결과는 receipts로 보낸다. 결과는 `kind: EVENT_RESULT`이고 `status`가 `ACCEPTED`(저장), `DUPLICATE`(같은 키 재전송), `REJECTED`(거절, `error.code` 포함) 중 하나다. typing과 읽음 커서는 거절될 때만 회신한다.
 
 ### 4. Resume
 
-성공하면 놓친 이벤트 뒤에 `RESUMED` 프레임이 오며 `fromSeq`, `toSeq`를 포함한다. 클라이언트는 이미 적용한 seq 이하를 버린다. 최대 200개·256KB·노드 동시 3건을 넘기면 이벤트 대신 같은 구독으로 `SYSTEM_RESYNC`(`fromSeq` 포함)를 받고 REST 보충을 한다.
+성공하면 놓친 이벤트 뒤에 `RESUMED` 프레임이 오며 `fromSeq`, `toSeq`를 포함한다. 클라이언트는 이미 적용한 seq 이하를 버린다. 최대 200개·256KB·노드 동시 3건을 넘기면 이벤트 대신 같은 구독으로 `SYSTEM_RESYNC`(`fromSeq` 포함)를 받고 REST 보충을 한다. Redis 구독이 끊겼다 복구될 때도 `SYSTEM_RESYNC`가 오는데, 이때는 `fromSeq`가 없으므로 마지막으로 적용한 seq를 `afterSeq`로 넣어 보충한다.
 
 ```json
 {"kind":"RESUMED","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","fromSeq":43,"toSeq":49}

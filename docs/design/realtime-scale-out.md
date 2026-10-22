@@ -42,7 +42,7 @@ Redis 7부터 있는 sharded Pub/Sub(`SSUBSCRIBE`, `SPUBLISH`)를 Redis Cluster�
 | 구독 | 기동 때 `PSUBSCRIBE chat:s:*` 한 번 | 로컬 구독자가 생긴 노드만 `SSUBSCRIBE chat:s:{sessionId}` |
 | 발행 | `PUBLISH chat:s:{sessionId}` | `SPUBLISH chat:s:{sessionId}` |
 | 노드 1대의 수신량 | 전체 이벤트 | 자기 노드에 구독자가 있는 세션의 이벤트 |
-| Redis | 단일 인스턴스 | Redis Cluster(샤드 여러 대) |
+| Redis | 단일 인스턴스 | Pub/Sub 전용 Redis Cluster를 따로 두고, presence·로그인 횟수 제한은 기존 단일 Redis에 남긴다 |
 
 `ShardedRealtimeBus`를 새로 만들어 `RealtimeBus`의 빈 메서드를 채운다.
 
@@ -68,13 +68,15 @@ sequenceDiagram
  A-->>C: 라이브 이벤트(seq로 중복 제거)
 ```
 
-전달 의미는 지금과 같이 "최선 노력"이다. 샤드 장애나 슬롯 이동 중에는 구독이 끊길 수 있다. 다시 구독한 직후 그 세션의 로컬 구독자에게 `SYSTEM_RESYNC`를 보내 보충 API로 빈 구간을 채운다. 현재 패턴 구독이 끊겼다가 돌아올 때의 처리와 같은 규칙이다.
+같은 Redis에 있는 presence Lua 스크립트는 단일 Redis를 전제로 여러 키(`ws:nodes`, `ws:node:{node}`, `pr:{user}` 등)를 스크립트 안에서 만들어 쓴다(`presence.lua` 주석). 이 키들은 해시 슬롯이 서로 달라 Cluster에서는 그대로 실행되지 않는다. 그래서 전달용 Cluster만 새로 두고 presence와 로그인 횟수 제한은 지금의 단일 Redis에 남긴다. presence까지 Cluster로 옮기려면 사용자별 해시태그로 키를 묶고 전역 키(`ws:nodes` 등)를 다시 설계해야 하는데, 이는 별도 작업이다.
+
+전달은 지금처럼 보장하지 않는다. 샤드 장애나 슬롯 이동 중에는 구독이 끊길 수 있다. 다시 구독한 직후 그 세션의 로컬 구독자에게 `SYSTEM_RESYNC`를 보내 보충 API로 빈 구간을 채운다. 현재 패턴 구독이 끊겼다가 돌아올 때의 처리와 같은 규칙이다.
 
 ## 전환 절차
 
 1. 부하 측정으로 전환 기준을 확인한다. 노드별 수신량 대비 로컬 전달 비율과 전달 지연 p99를 본다.
 2. `ShardedRealtimeBus`를 만든다. 구독 수 집계, 해제 유예, 구독 확인 대기를 포함한다.
-3. 설정값으로 구현을 고를 수 있게 한다. 두 구현은 채널 이름이 같아 한 클러스터 안에서 함께 쓸 수 없다. 전체 노드를 같은 설정으로 다시 배포한다.
+3. 설정값으로 구현을 고를 수 있게 한다. sharded Pub/Sub(`SPUBLISH`)로 보낸 메시지는 `PSUBSCRIBE` 구독자에게 전달되지 않으므로, 두 구현을 섞어 배포하면 노드 간 전달이 끊긴다. 전체 노드를 같은 설정으로 다시 배포한다.
 4. 시험 환경의 Redis Cluster에서 지금의 클러스터 테스트(노드 간 전달, 100건 연속 전송, 노드 강제 종료 후 resume)와 샤드 장애·슬롯 이동 시나리오를 통과시킨다.
 5. 운영에 배포하고 RESYNC 비율과 전달 지연을 비교한다. 문제가 생기면 설정을 되돌려 패턴 구독으로 돌아간다.
 
@@ -84,6 +86,7 @@ sequenceDiagram
 |---|---|
 | 노드 1대의 수신량이 전체 이벤트량이 아니라 자기 사용자 수에 비례한다 | Redis를 Cluster로 운영해야 한다. 샤드 장애와 슬롯 재배치를 다룰 줄 알아야 한다 |
 | Redis 부하가 샤드로 나뉜다 | 노드마다 세션별 구독 상태(구독 수, 해제 유예)를 관리해야 한다 |
+| presence는 지금 구현을 그대로 쓴다 | Redis가 전달용 Cluster와 presence용 단일 인스턴스, 두 벌이 된다 |
 | STOMP·resume 코드는 그대로 둔다 | 구독할 때마다 Redis 확인 응답을 기다려 resume 시작이 그만큼 늦어진다 |
 
 Kafka를 노드 간 전달에 쓰면 메시지를 보관해 재생할 수 있다. 하지만 지연이 늘고 노드마다 컨슈머를 운영해야 한다. 빠진 구간은 이미 DB와 seq로 메울 수 있으므로 이 용도에는 고르지 않았다.

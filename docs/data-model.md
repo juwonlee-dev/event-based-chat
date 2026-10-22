@@ -22,23 +22,24 @@ erDiagram
   uuid id PK
   varchar title
   varchar status
+  uuid created_by FK
   bigint last_seq
  }
  SESSION_PARTICIPANT {
-  uuid session_id PK
-  uuid user_id PK
+  uuid session_id PK,FK
+  uuid user_id PK,FK
   boolean active
   bigint join_seq
  }
  SESSION_EVENT {
-  uuid session_id PK
+  uuid session_id PK,FK
   bigint seq PK
   uuid event_id
   varchar type
   timestamptz server_ts
  }
  SESSION_SNAPSHOT {
-  uuid session_id PK
+  uuid session_id PK,FK
   bigint last_seq
   jsonb state
   varchar state_hash
@@ -211,7 +212,7 @@ CREATE TABLE session_snapshot (
 |---|---|---|---|---|
 | 사용자와 세션 | 사용자 테이블과 세션 테이블 분리 | 계정 기준값 중복을 막고 FK로 생성자 존재를 보장 | 사용자 스냅샷을 세션에 복사 | 사용자 표시 변경은 과거 데이터에 자동 보존되지 않음 |
 | 참여 정보 | 참여 시 역할·분류·표시 이름을 참여 행에 복사 | 과거 화면에서 계정 변경 때문에 이름과 분류가 바뀌지 않음 | 사용자 테이블을 매번 조인 | 일부 값 중복과 갱신 규칙 부담 |
-| 현재 상태 | 세션·참여자 현재 행과 이벤트를 함께 저장 | 쓰기 판정과 목록 조회를 이벤트 전체 재생 없이 수행 | 이벤트에서 매번 현재 상태 계산 | 현재 행과 로그의 일관성을 트랜잭션으로 지켜야 함 |
+| 현재 상태 | 세션·참여자 현재 행과 이벤트를 함께 저장 | 쓰기 판정과 목록 조회를 이벤트 전체 리플레이 없이 수행 | 이벤트에서 매번 현재 상태 계산 | 현재 행과 로그의 일관성을 트랜잭션으로 지켜야 함 |
 | 이벤트 payload | 유형별 부가값은 JSONB, 메시지 본문은 `content text` | 메시지 본문을 상태 복원 조회에서 읽지 않음 | 전체 이벤트를 JSONB 하나로 저장 | 이벤트별 열 접근과 색인화는 고정 열보다 제한됨 |
 | 스냅샷 상태 | JSONB와 reducer 버전·해시 | 도메인 상태 표현을 한 행에 저장하고 결정성 비교 | 각 상태 필드를 관계형 열로 분리 | 스키마 변경 시 리듀서 버전 호환 책임이 생김 |
 | outbox | 일반 관계형 행과 JSONB 요청 | DB 변경과 발행 의도를 같은 커밋에 넣음 | DB 커밋 후 Kafka 직접 발행 | relay와 중복 발행을 감당해야 함 |
@@ -221,11 +222,11 @@ CREATE TABLE session_snapshot (
 | 인덱스 | 사용 쿼리 | 컬럼 순서·부분 조건의 이유 |
 |---|---|---|
 | `chat_session_created_idx` | 필터 없는 최신 세션 목록, 날짜 범위·키셋 | 정렬과 페이지 방향을 먼저 맞춰 전체 목록을 순차 탐색 |
-| `chat_session_waiting_idx` | `status=WAITING` 목록 | 대기 행만 저장해 인덱스 크기와 읽기 범위를 줄임 |
+| `chat_session_waiting_idx` | `status=WAITING` 목록 | 대기 행만 저장해 인덱스 크기와 읽기 범위를 줄임. 조건이 바인드 파라미터로 들어오므로 실제 사용 여부는 실행 계획으로 확인한다 |
 | `chat_session_category_created_idx` | 분류별 최신 목록 | 동등 조건인 category 다음에 정렬·커서 키를 둠 |
 | `chat_session_title_trgm_idx` | `lower(title) LIKE '%q%'` | 임의 부분 문자열 검색은 B-tree 접두 검색이 아니므로 trigram GIN 사용 |
 | `session_participant_active_user_idx` | 사용자의 활성 참여 세션 탐색 | user 먼저 찾고 활성 행만 보관. 복합 PK는 세션 우선이라 이 질의에 맞지 않음 |
-| `session_event` 기본 키 `(session_id, seq)` | 멱등 이외 이벤트 범위·리플레이·RESUME·화면 항목 | 세션 동등 조건 뒤 seq 범위를 읽고 정렬 없이 반환 |
+| `session_event` 기본 키 `(session_id, seq)` | 멱등 이외 이벤트 범위·리플레이·resume·화면 항목 | 세션 동등 조건 뒤 seq 범위를 읽고 정렬 없이 반환 |
 | `session_event_idempotency_uq` | 세션·발신자·이벤트 키 멱등 조회 | 키가 없는 다수 이벤트를 빼는 부분 유일 인덱스 |
 | `session_event_create_idempotency_uq` | 생성 재시도 | 세션 행이 아직 없어 actor와 키만으로 유일성 보장, 생성 유형만 저장 |
 | `session_event_ts_idx` | 기준 시각 이하의 seq 탐색 | 세션 다음 서버 시각·seq 순서로 최신 시점 후보를 찾음 |
@@ -234,15 +235,13 @@ CREATE TABLE session_snapshot (
 
 세션과 참여자 테이블은 `fillfactor=90`으로 페이지에 여유를 남긴다. 자주 바뀌는 세션 카운터·참여 상태 열을 인덱스에 넣지 않아 동일 페이지 안에서 HOT update가 가능할 여지를 만든다. 이는 보장 설정이 아니라 인덱스 열 변경이 없고 페이지 공간이 있을 때만 성립한다. 세션의 vacuum scale factor를 0.05로 둔 것은 반복 갱신 행의 정리를 기본값보다 자주 고려하기 위해서다.
 
-목록 필터는 조건별로 다르게 동작한다. 전체 목록은 `chat_session_created_idx`, WAITING은 부분 인덱스, category는 category 선두 인덱스, 제목은 trigram 인덱스 후보를 사용한다. 참여자 필터는 현재 코드에서 `EXISTS` 서브쿼리의 session_id와 user_id 및 `left_seq IS NULL`을 검사한다. 현재 부분 인덱스는 `active` 기준이라 이 조건과 정확히 일치하지 않으므로, 플래너가 PK 또는 다른 경로를 고를 수 있다. 실제 배포 데이터에서 `EXPLAIN (ANALYZE, BUFFERS)`로 확인하고 전용 인덱스 추가 여부를 결정해야 한다.
-
 ## 핫패스 쿼리
 
 아래 SQL은 저장소와 서비스 코드의 질의 순서를 나타낸다. Hibernate가 엔티티 쓰기를 여러 문장으로 내보낼 수 있으며, 정확한 바인드 값과 세부 SQL은 실행 시점에 달라진다.
 
 ### 1. 세션 이벤트 수집
 
-`SessionWriter.write`의 순서는 사용자 조회, 세션 잠금, 참여자 조회, 멱등 조회(키가 있을 때), 판정 후 이벤트와 변경 행 저장이다. 멱등 키가 있는 요청은 잠금 전에 조회하지 않는다. 잠근 뒤 확인해야 동시 재전송이 같은 세션 직렬화 아래 안전하다.
+`SessionWriter.write`의 순서는 사용자 조회, 세션 잠금, 참여자 조회, 멱등 조회(키가 있을 때), 판정 후 이벤트와 변경 행 저장이다. 멱등 조회는 잠금을 잡은 뒤에 한다. 그래야 같은 키로 동시에 온 재전송이 차례로 처리되어 두 번 저장되지 않는다.
 
 ```sql
 SELECT ... FROM app_user WHERE id = :actor_id;
@@ -280,7 +279,7 @@ ORDER BY s.created_at DESC, s.id DESC
 LIMIT :limit;
 ```
 
-전체·날짜 커서는 created 인덱스, WAITING은 WAITING 부분 인덱스, 분류는 category 선두 인덱스, 제목 부분 문자열은 GIN trigram이 후보가 된다. 여러 조건을 동시에 주면 한 인덱스만으로 정렬과 필터를 모두 해결하지 못할 수 있다. 참여자 `EXISTS`는 `session_participant_active_user_idx`의 부분 조건과 일치하지 않아 예상하지 말고 실행 계획을 확인해야 한다. 병목은 선택도가 낮은 다중 필터와 정렬이며, 개선은 실측 실행 계획과 대표 데이터 분포에 맞춘 복합 인덱스 또는 검색 전용 표현을 검토하는 순서다.
+전체·날짜 커서는 created 인덱스, WAITING은 WAITING 부분 인덱스, 분류는 category 선두 인덱스, 제목 부분 문자열은 GIN trigram이 후보가 된다. 여러 조건을 동시에 주면 한 인덱스만으로 정렬과 필터를 모두 해결하지 못할 수 있다. 참여자 필터의 `EXISTS`(`left_seq IS NULL`)는 부분 인덱스 조건(`active`)과 달라 그 인덱스를 쓰지 못한다. 세션마다 참여자 기본 키 `(session_id, user_id)`로 확인하는 경로가 되므로, 참여 세션이 적은 사용자일수록 목록 인덱스를 길게 훑는다. `(user_id, session_id) WHERE left_seq IS NULL` 인덱스나 조건을 `active`로 맞추는 방안을 실행 계획으로 확인한 뒤 검토한다. 병목은 선택도가 낮은 다중 필터와 정렬이며, 개선은 실측 실행 계획과 대표 데이터 분포에 맞춘 복합 인덱스 또는 검색 전용 표현을 검토하는 순서다.
 
 ### 3. 시점 복원
 
@@ -299,11 +298,12 @@ FROM session_event WHERE session_id = :id AND seq > :after AND seq <= :up_to
 ORDER BY seq ASC LIMIT 5000;
 -- 화면 항목(PK와 session_event_display_idx 후보)
 SELECT ... FROM session_event WHERE session_id = :id AND type IN (...)
-  AND seq <= :up_to AND (:before IS NULL OR seq < :before)
+  AND seq <= :up_to
+  AND seq < :before              -- beforeSeq가 있을 때만
 ORDER BY seq DESC LIMIT :item_limit_plus_one;
 ```
 
-시간 변환은 `session_event_ts_idx`, 순차 재생은 기본 키, 스냅샷은 세션 기본 키를 쓴다. 화면 항목 질의 조건은 부분 인덱스 조건과 같아서 부분 인덱스를 이용할 수 있다. 오래된 세션의 스냅샷이 뒤처지면 리플레이 행 수와 CPU가 증가하고, 화면 항목 수 제한은 상태 리플레이 비용을 줄여주지 않는다. 우선은 스냅샷 요청 지연과 재생 건수를 관측하고 100 이벤트 주기를 조정한다. 그 뒤 이력 스냅샷이나 이벤트 분할을 검토한다.
+시간 변환은 `session_event_ts_idx`, 리플레이는 기본 키, 스냅샷은 세션 기본 키를 쓴다. 화면 항목 조회의 유형 조건은 부분 인덱스 조건과 같은 값이지만 바인드 파라미터로 들어간다. 일반 실행 계획(generic plan)에서는 부분 인덱스를 못 쓸 수 있어, 기본 키 범위 조회로 처리될 수도 있다. 같은 이유로 생성 멱등 조회는 유형을 리터럴로 고정해 두었다. 실제 사용 여부는 실행 계획으로 확인한다. 오래된 세션의 스냅샷이 뒤처지면 리플레이 행 수와 CPU가 증가하고, 화면 항목 수 제한은 상태 리플레이 비용을 줄여주지 않는다. 우선은 스냅샷 요청 지연과 리플레이 건수를 관측하고 100 이벤트 주기를 조정한다. 그 뒤 이력 스냅샷이나 이벤트 분할을 검토한다.
 
 ## 데이터 증가 대응
 
