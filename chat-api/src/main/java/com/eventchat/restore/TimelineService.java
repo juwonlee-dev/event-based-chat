@@ -102,6 +102,11 @@ public class TimelineService {
                 throw beforeStart();
             }
             seq = events.findSeqAt(sessionId, upTo).orElseThrow(TimelineService::beforeStart);
+            // S는 그 밀리초 끝까지 넓혔으므로 T도 S의 시각보다 앞서지 않게 한다(응답의 시각들이 T를 넘지 않도록).
+            Instant seqTime = events.findServerTs(sessionId, seq).orElseThrow();
+            if (seqTime.isAfter(referenceTime)) {
+                referenceTime = seqTime;
+            }
         } else if (atSeq != null) {
             seq = Math.min(atSeq, session.getLastSeq());
             referenceTime = events.findServerTs(sessionId, seq).orElseThrow();
@@ -122,11 +127,11 @@ public class TimelineService {
                 snapshot.map(SessionSnapshot::getLastSeq).orElse(null), replayed, folder.hash(state));
         meters.counter("chat.timeline.restore", "mode", restoredFrom.mode().name()).increment();
         meters.summary("chat.timeline.replayed.events").record(replayed);
+        Instant t = referenceTime;
         return new TimelineView(sessionInfo(session),
-                new TimelineView.AsOf(millis(requestedAt), seq, millis(referenceTime), state.status(),
-                        state.messageCount()),
+                new TimelineView.AsOf(millis(requestedAt), seq, millis(t), state.status(), state.messageCount()),
                 restoredFrom,
-                state.participants().stream().map(p -> participant(state, p, referenceTime)).toList(),
+                state.participants().stream().map(p -> participant(state, p, t)).toList(),
                 items(sessionId, seq, before, itemLimit));
     }
 

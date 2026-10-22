@@ -72,6 +72,19 @@ public final class SessionReducer {
         if (event.schemaVersion() != SCHEMA_VERSION) {
             throw new ReplayUnsupportedException(event.seq(), "지원하지 않는 스키마 버전입니다: " + event.schemaVersion());
         }
+        try {
+            fold(event);
+        } catch (ReplayUnsupportedException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            // payload 결함(필드 누락, 형식 오류)도 건너뛰지 않고 결정적으로 실패시킨다.
+            throw new ReplayUnsupportedException(event.seq(), "이벤트를 해석할 수 없습니다: " + e);
+        }
+        lastSeq = event.seq();
+        lastEventTs = event.serverTs();
+    }
+
+    private void fold(ReplayEvent event) {
         Instant ts = event.serverTs();
         switch (event.type()) {
             case SESSION_CREATED -> {
@@ -102,8 +115,6 @@ public final class SessionReducer {
             case RECONNECT -> update(event, p -> withPresence(p, PresenceStatus.ONLINE, ts));
             default -> throw new ReplayUnsupportedException(event.seq(), "지원하지 않는 이벤트 타입입니다: " + event.type());
         }
-        lastSeq = event.seq();
-        lastEventTs = ts;
     }
 
     /** 진행 중이 될 때 두 사람의 연결 상태 기준값을 싣고, 종단 전이는 모두의 입력을 끈다. */
