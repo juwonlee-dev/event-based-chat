@@ -26,7 +26,11 @@ public sealed interface SessionCommand {
     record Typing(UUID actorId, boolean started, Instant at) implements SessionCommand {
     }
 
-    record ReadCursor(UUID actorId, long upToSeq, Instant at) implements SessionCommand {
+    /**
+     * @param upToSeq   요청한 seq 이하에서 마지막 MESSAGE의 seq(메시지가 아닌 이벤트로는 커서가 움직이지 않는다)
+     * @param readMsgNo 그 MESSAGE의 메시지 번호
+     */
+    record ReadCursor(UUID actorId, long upToSeq, int readMsgNo, Instant at) implements SessionCommand {
     }
 
     /**

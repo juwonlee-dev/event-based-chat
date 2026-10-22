@@ -28,11 +28,4 @@ public interface SessionEventRepository
               and e.actorId = :actorId and e.clientEventId = :clientEventId""")
     Optional<SessionEvent> findCreatedByIdempotencyKey(UUID actorId, String clientEventId);
 
-    /** 이 seq까지의 마지막 메시지 번호. 읽음 커서를 저장할 때만 부른다. */
-    @Query("""
-            select coalesce(max(e.msgNo), 0) from SessionEvent e
-            where e.sessionId = :sessionId
-              and e.type = com.eventchat.domain.session.EventType.MESSAGE
-              and e.seq <= :upToSeq""")
-    int findLastMsgNoUpTo(UUID sessionId, long upToSeq);
 }

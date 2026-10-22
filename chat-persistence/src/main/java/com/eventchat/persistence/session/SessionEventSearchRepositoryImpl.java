@@ -83,6 +83,17 @@ class SessionEventSearchRepositoryImpl implements SessionEventSearchRepository {
     }
 
     @Override
+    public Optional<MessagePosition> findLastMessageAtOrBefore(UUID sessionId, long seq) {
+        return Optional.ofNullable(queryFactory
+                .select(Projections.constructor(MessagePosition.class, sessionEvent.seq, sessionEvent.msgNo))
+                .from(sessionEvent)
+                .where(sessionEvent.sessionId.eq(sessionId), sessionEvent.seq.loe(seq),
+                        sessionEvent.type.eq(EventType.MESSAGE))
+                .orderBy(sessionEvent.seq.desc())
+                .fetchFirst());
+    }
+
+    @Override
     public List<SessionEventRow> findDisplayItems(UUID sessionId, long upToSeq, Long beforeSeq, int limit) {
         BooleanBuilder where = new BooleanBuilder()
                 .and(sessionEvent.sessionId.eq(sessionId))

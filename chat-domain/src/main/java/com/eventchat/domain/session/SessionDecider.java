@@ -137,7 +137,10 @@ public final class SessionDecider {
         return new Decision.Accepted(List.of(new NewEvent(type, command.actorId(), Map.of(), false)), null);
     }
 
-    /** 커서는 마지막 seq로 자르고, 앞으로 갔으면서 최소 간격이 지났을 때만 저장한다. */
+    /**
+     * 커서는 메시지 기준이다(호출하는 쪽이 요청 seq 이하의 마지막 MESSAGE로 맞춰 넘긴다). 그래서 READ_CURSOR·typing·presence
+     * 같은 비메시지 이벤트만 늘어난 경우는 앞으로 간 것이 아니다. 앞으로 갔으면서 최소 간격이 지났을 때만 저장한다.
+     */
     private static Decision read(SessionState state, ReadCursor command, IngestPolicy policy) {
         Optional<Rejection> notAllowed = checkActive(state, command.actorId());
         if (notAllowed.isPresent()) {
@@ -151,8 +154,11 @@ public final class SessionDecider {
         if (!advanced || tooSoon) {
             return new Decision.Suppressed();
         }
-        return new Decision.Accepted(List.of(new NewEvent(EventType.READ_CURSOR, command.actorId(),
-                Map.of("upToSeq", upToSeq), false)), null);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("upToSeq", upToSeq);
+        payload.put("readMsgNo", command.readMsgNo());
+        return new Decision.Accepted(List.of(new NewEvent(EventType.READ_CURSOR, command.actorId(), payload, false)),
+                null);
     }
 
     /**

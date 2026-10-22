@@ -21,6 +21,9 @@ public interface SessionEventSearchRepository {
 
     Optional<Instant> findServerTs(UUID sessionId, long seq);
 
+    /** seq 이하에서 마지막 MESSAGE 1건의 위치(PK를 역방향으로 읽다가 처음 만나는 MESSAGE에서 멈춘다). */
+    Optional<MessagePosition> findLastMessageAtOrBefore(UUID sessionId, long seq);
+
     /** timeline 화면 항목(Q5): seq가 upToSeq 이하이고 beforeSeq 미만인 표시 이벤트를 seq 내림차순으로 최대 limit건. */
     List<SessionEventRow> findDisplayItems(UUID sessionId, long upToSeq, Long beforeSeq, int limit);
 
@@ -28,6 +31,9 @@ public interface SessionEventSearchRepository {
      * @param from   server_ts 하한(포함)
      * @param before server_ts 상한(미포함)
      */
+    record MessagePosition(long seq, int msgNo) {
+    }
+
     record Range(UUID sessionId, long afterSeq, Instant from, Instant before, Set<EventType> types) {
     }
 }

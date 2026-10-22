@@ -17,6 +17,7 @@ import com.eventchat.persistence.session.EventOutboxRepository;
 import com.eventchat.persistence.session.SessionEvent;
 import com.eventchat.persistence.session.SessionEventRepository;
 import com.eventchat.persistence.session.SessionEventRow;
+import com.eventchat.persistence.session.SessionEventSearchRepository;
 import com.eventchat.persistence.session.SessionParticipant;
 import com.eventchat.persistence.session.SessionParticipantRepository;
 import com.eventchat.persistence.user.AppUser;
@@ -145,8 +146,11 @@ public class SessionWriter {
     }
 
     public IngestResult readCursor(UUID sessionId, UUID actorId, long upToSeq) {
-        Outcome outcome = write(sessionId, actorId, null, null, null,
-                (actor, at) -> new SessionCommand.ReadCursor(actor.getId(), upToSeq, at));
+        Outcome outcome = write(sessionId, actorId, null, null, null, (actor, at) -> {
+            SessionEventSearchRepository.MessagePosition read = events.findLastMessageAtOrBefore(sessionId, upToSeq)
+                    .orElse(new SessionEventSearchRepository.MessagePosition(0, 0));
+            return new SessionCommand.ReadCursor(actor.getId(), read.seq(), read.msgNo(), at);
+        });
         return ingested(EventType.READ_CURSOR, outcome);
     }
 
@@ -282,12 +286,9 @@ public class SessionWriter {
                 }
                 case TYPING_STARTED -> find(sessionParticipants, actor.getId()).startTyping(seq, at);
                 case TYPING_STOPPED -> find(sessionParticipants, actor.getId()).stopTyping();
-                case READ_CURSOR -> {
-                    long upToSeq = ((Number) payload.get("upToSeq")).longValue();
-                    int readMsgNo = events.findLastMsgNoUpTo(session.getId(), upToSeq);
-                    payload = Map.of("upToSeq", upToSeq, "readMsgNo", readMsgNo);
-                    find(sessionParticipants, actor.getId()).read(upToSeq, readMsgNo, at);
-                }
+                case READ_CURSOR -> find(sessionParticipants, actor.getId()).read(
+                        ((Number) payload.get("upToSeq")).longValue(), ((Number) payload.get("readMsgNo")).intValue(),
+                        at);
                 default -> {
                 }
             }
