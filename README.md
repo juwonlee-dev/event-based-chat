@@ -31,8 +31,8 @@
 | 중복 방지 | 멱등 키 + 요청 해시, typing·읽음 커서는 같은 상태의 반복을 억제 | [정합성과 상태 복원](docs/consistency-and-restore.md) |
 | 순서 뒤바뀜 | 세션별 서버 seq를 유일한 기준으로 | [정합성과 상태 복원](docs/consistency-and-restore.md) |
 | 특정 시점 복원 | `GET /sessions/{id}/timeline?at=` 또는 `atSeq=` | [정합성과 상태 복원](docs/consistency-and-restore.md) |
-| DB 설계(ERD, DDL, 인덱스) | Flyway 마이그레이션 | [데이터 모델과 쿼리](docs/data-model.md) |
-| REST API 설계 | OpenAPI(swagger-ui) + 계약 문서 | [API](docs/api.md) |
+| DB 설계(ERD, DDL, 인덱스) | Flyway 마이그레이션, [ERD](https://www.erdcloud.com/d/ngEbEsraLRdZBRhsb) | [데이터 모델과 쿼리](docs/data-model.md) |
+| REST API 설계 | Swagger(swagger-ui): http://127.0.0.1:8080/swagger-ui.html | [API](docs/api.md) |
 | 재연결 시 정합성 | 마지막으로 받은 seq부터 resume, 상한을 넘으면 RESYNC 후 보충 API | [정합성과 상태 복원](docs/consistency-and-restore.md) |
 | 수평 확장 | 상태는 PostgreSQL·Redis에 두고 앱은 nginx 뒤 여러 대 | [운영과 장애 대응](docs/operations.md) |
 | 관측 가능성 | ECS JSON 로그, 지표, OpenTelemetry 추적, Grafana 대시보드·알림 | [운영과 장애 대응](docs/operations.md) |
@@ -45,9 +45,21 @@
 - 세션 참여자는 두 명이다. 한 사람이 세션을 만들면 대기 상태가 되고, 다른 한 사람이 참여하면 진행 상태가 된다. 참여는 역할·분류와 관계없이 관리자가 아닌 사용자면 할 수 있고, 세션의 분류는 만든 사람의 분류를 따른다.
 - 한 번 퇴장하면 그 세션에 다시 참여할 수 없고, 세션은 중단 상태로 끝난다.
 - 메시지 수정·삭제는 만들지 않았다. 복원 결과의 메시지는 모두 "전송됨" 상태다. 추가하는 방법은 [정합성과 상태 복원](docs/consistency-and-restore.md)에 적었다.
-- 메시지는 2000자까지 받는다. 그보다 긴 메시지는 [설계](docs/design/)만 했다.
+- 메시지는 2000자까지 받는다. 그보다 긴 메시지는 [긴 메시지 설계](docs/design/long-message.md)만 했다.
 - 인증은 과제 범위 밖이라 로그인, 토큰 갱신, 로그아웃까지만 만들었다. 사용자는 시드 데이터로 넣는다.
 - 화면은 없다. 동작은 테스트와 swagger-ui로 확인한다.
+
+### 한계와 고도화 계획
+
+| 항목 | 현재 | 이유 | 고도화 방향 |
+|---|---|---|---|
+| 메시지 수정·삭제 | 이벤트 유형에 없다 | 현재는 변경 불가 기록과 결정적 재생을 우선해 변경 이력·권한 규칙 설계를 뒤로 뒀다 | 이벤트·리듀서·schema_version 확장 |
+| 메시지 길이 | 최대 2000자 | 한 프레임과 한 DB 행에서 안전하게 다룰 수 있는 크기를 우선하고, 큰 본문 분할·객체 보관의 정합성 비용은 별도 설계로 남겼다 | [긴 메시지 설계](docs/design/long-message.md) |
+| Snapshot 이력 | 세션당 최신 1행, 과거 시점은 전체 replay | 저장 공간과 정리 정책을 늘리지 않고 복원 기준점을 제공하는 쪽을 먼저 선택했다 | (session_id, last_seq) 이력 저장 |
+| 부하 검증 | 부하 테스트가 없다 | 정합성·장애 시나리오 검증을 우선했고, 단일 개발 PC에서는 부하 발생기와 대상이 자원을 나눠 써 수치 신뢰도가 낮다 | 동시 연결·초당 메시지 부하를 전용 환경에서 측정 |
+| 노드 전달 | 패턴 구독이 모든 노드로 전달 | 배포 단순성과 전체 노드 수가 작은 현재 구성을 우선했고, 세션별 라우팅은 구독 재배치 규칙이 더 필요하다 | [실시간 전달 수평 확장](docs/design/realtime-scale-out.md) |
+| 사용자 관리 | 시드 사용자, 로그인·갱신·로그아웃 | 채팅 일관성과 접근 검증을 우선하고 가입·복구 UX는 과제 범위에서 제외했다 | 가입·계정 수명주기 설계 |
+| 장애 검증 | 네트워크 분할·긴 GC·알림 발화 미검증 | 재현 가능한 노드·DB·Redis·Kafka 실패를 먼저 자동화했고, 시간 기반·분할 장애는 별도 환경이 필요하다 | 장애 주입 시나리오 추가 |
 
 ### 가산점 항목
 
@@ -91,7 +103,7 @@ DB 스키마(Flyway)와 Kafka 토픽은 앱이 기동할 때 만든다.
 
 | 주소 | 용도 |
 |---|---|
-| http://127.0.0.1:8080/swagger-ui.html | API 문서 |
+| http://127.0.0.1:8080/swagger-ui.html | API 명세(Swagger UI) |
 | http://127.0.0.1:8080/v3/api-docs | OpenAPI 명세(JSON) |
 | `ws://127.0.0.1:8080/ws` | STOMP over WebSocket |
 | http://127.0.0.1:8081/actuator/health | 상태 확인 |
@@ -146,12 +158,12 @@ docker compose down -v     # 볼륨까지 삭제. 다음 기동 때 DB와 시드
 | 문서 | 내용 |
 |---|---|
 | [아키텍처](docs/architecture.md) | 전체 구성, 기술 선택과 대안, 모듈 경계, 요청 흐름 |
-| [데이터 모델과 쿼리](docs/data-model.md) | ERD, 핵심 DDL, 인덱스 근거, 핫패스 쿼리 3개와 병목 |
-| [정합성과 상태 복원](docs/consistency-and-restore.md) | 순서 기준, 멱등, 재연결, presence, 리플레이·스냅샷, 비동기 파이프라인 |
+| [데이터 모델과 쿼리](docs/data-model.md) | ERD, 원문 DDL, 인덱스 근거, 핫패스 쿼리 3개와 병목 |
+| [정합성과 상태 복원](docs/consistency-and-restore.md) | 순서 기준, 멱등, 상태 머신, 재연결, presence, 복원과 비동기 파이프라인 |
 | [운영과 장애 대응](docs/operations.md) | 관측, 장애 3종의 감지 → 완화 → 복구, 수평 확장, 설정 기본값 |
 | [API](docs/api.md) | REST·STOMP 계약, 오류 코드, 클라이언트가 지켜야 할 규칙 |
 | [테스트](docs/testing.md) | 테스트 묶음, 실행 방법, 장애 주입 |
-| [확장 설계(미구현)](docs/design/) | 실시간 전달 수평 확장, 긴 메시지, 로그 수집 확장 |
+| [확장 설계](docs/design/README.md) | 실시간 전달 수평 확장, 긴 메시지, 중앙 로그 수집 확장 |
 
 ## 테스트
 
