@@ -12,13 +12,13 @@
 |---|---|---|---|
 | 순서 기준 | 세션별 서버 seq. 쓰기는 세션 행을 잠그고 직렬화한다 | 클라이언트 시각은 기기마다 다르고, 순서가 의미 있는 범위는 세션 하나다 | 같은 세션 안의 쓰기는 동시에 처리하지 않는다(1:1이라 경합이 작다). 발신자가 의도한 순서까지는 보장하지 않는다 |
 | 중복 처리 | 이벤트는 `clientEventId`, 세션 명령은 `Idempotency-Key` + 요청 해시. 멱등 조회를 상태 판정보다 먼저 한다 | 재전송은 처음 결과를 그대로 돌려주고, 같은 키로 다른 내용을 보내는 실수는 409로 잡는다 | 멱등 키를 이벤트와 함께 영구 보관한다 |
-| 저장 모델 | 이벤트 테이블이 원천(추가 전용). 세션·참여자 행은 같은 트랜잭션에서 갱신하는 현재 상태 | 복원은 이벤트만 보고, 쓰기 판정은 현재 상태 한 줄로 빠르게 한다 | 같은 규칙을 쓰기 측과 리듀서 두 곳에서 지킨다(검증 스크립트로 둘을 비교한다) |
+| 저장 모델 | 이벤트 테이블이 원천(추가 전용). 세션·참여자 행은 같은 트랜잭션에서 갱신하는 현재 상태 | 복원은 이벤트만 보고, 쓰기 판정은 현재 상태 한 줄로 빠르게 한다 | 같은 규칙을 쓰기 측과 리듀서 두 곳에서 지키고 테스트에서 비교한다 |
 | 실시간 프로토콜 | STOMP over WebSocket, Spring 내장 브로커 | 구독 단위 권한 검사, heart-beat, 표준 프레임을 그대로 쓴다 | 외부 브로커가 없어 노드 간 전달을 직접 만들었다 |
 | 노드 간 전달 | Redis Pub/Sub(패턴 구독) | 지연이 짧고 구성이 단순하다 | 전달을 보장하지 않는다. 빠진 구간은 seq 기반 resume과 RESYNC로 메운다 |
 | presence | 사용자 단위로 Redis Lua에서 원자적으로 판정. 15초 유예 뒤 상태가 바뀔 때만 기록 | 탭 전환이나 짧은 망 끊김으로 깜빡이지 않게 한다 | 오프라인 표시가 늦다. 소켓이 닫히면 약 17초, heart-beat만 끊기면 약 30~40초 뒤에 기록된다 |
 | 상태 복원 | 리듀서 하나로 리플레이. 스냅샷은 성능용 | 정확성의 근거를 한 곳(리듀서)에 모은다 | 스냅샷이 늦으면 리플레이 구간이 길어진다 |
 | 스냅샷 생성 | outbox → Kafka → 작업자, 실패하면 백오프 재시도 후 DLT | 쓰기 경로에서 스냅샷 비용을 빼고, 재시도와 실패 격리는 Kafka 소비 쪽에 맡긴다 | Kafka가 하나 더 필요하다 |
-| 검증 | 실제로 띄운 서버에 HTTP·STOMP로 요청을 보내는 검증 스크립트 | 위험이 노드 사이, 재연결, 장애 상황에 몰려 있다 | 순수 로직만 빠르게 돌려 보는 단위 테스트는 없다 |
+| 테스트 | JUnit 단위·통합·클러스터 테스트. 실행은 `scripts/test`의 Bash 스크립트로 한다 | 노드 사이 전달, 재연결, 장애 상황까지 확인한다 | 통합·클러스터 테스트에는 Docker가 필요하다 |
 
 ## 과제 요구사항 대응
 
@@ -47,29 +47,29 @@
 - 메시지 수정·삭제는 만들지 않았다. 복원 결과의 메시지는 모두 "전송됨" 상태다. 추가하는 방법은 [정합성과 상태 복원](docs/consistency-and-restore.md)에 적었다.
 - 메시지는 2000자까지 받는다. 그보다 긴 메시지는 [설계](docs/design/)만 했다.
 - 인증은 과제 범위 밖이라 로그인, 토큰 갱신, 로그아웃까지만 만들었다. 사용자는 시드 데이터로 넣는다.
-- 화면은 없다. 동작은 검증 스크립트와 swagger-ui로 확인한다.
+- 화면은 없다. 동작은 테스트와 swagger-ui로 확인한다.
 
 ### 가산점 항목
 
 | 과제의 가산점 항목 | 한 것 | 확인 위치 |
 |---|---|---|
-| Snapshot 생성 자동화 | 이벤트 100건마다, 그리고 세션이 끝날 때 스냅샷 요청을 남긴다 | [정합성과 상태 복원](docs/consistency-and-restore.md), `p6_restore.py` |
-| Projection 비동기 파이프라인 | outbox → Kafka → 작업자 → DLT | [정합성과 상태 복원](docs/consistency-and-restore.md), `p6_restore.py core,dlt,kafka` |
+| Snapshot 생성 자동화 | 이벤트 100건마다, 그리고 세션이 끝날 때 스냅샷 요청을 남긴다 | [정합성과 상태 복원](docs/consistency-and-restore.md), `RestoreIT` |
+| Projection 비동기 파이프라인 | outbox → Kafka → 작업자 → DLT | [정합성과 상태 복원](docs/consistency-and-restore.md), `RestoreIT`, `InfraFailureIT` |
 | Snapshot + Replay 복원 최적화 | 스냅샷 뒤의 이벤트만 리플레이한다. 응답에 상태 해시를 싣고, 관리자는 스냅샷 없이 전체를 리플레이해 결과를 비교할 수 있다 | [정합성과 상태 복원](docs/consistency-and-restore.md) |
-| 재연결 시 resume / replay 고도화 | 구독할 때 마지막 seq를 넘기면 놓친 이벤트를 이어서 받는다. 상한(200건, 256KB)을 넘으면 RESYNC | [API](docs/api.md), `p4_realtime.py` |
+| 재연결 시 resume / replay 고도화 | 구독할 때 마지막 seq를 넘기면 놓친 이벤트를 이어서 받는다. 상한(200건, 256KB)을 넘으면 RESYNC | [API](docs/api.md), `RealtimeIT`, `ClusterIT` |
 | 운영 대시보드 | Grafana 대시보드 1개(14개 패널)와 알림 규칙 8개 | [운영과 장애 대응](docs/operations.md) |
-| 테스트 전략 고도화 | 노드 강제 종료, Redis·Kafka 중단을 포함한 검증 스크립트 | [검증](docs/verification.md) |
+| 테스트 전략 고도화 | 노드 강제 종료, Redis·Kafka 장애를 포함한 JUnit 테스트와 Bash 러너 | [테스트](docs/testing.md) |
 | 추가 통신 방식 비교 | WebSocket, SSE, 롱폴링, WebRTC를 비교했다(구현은 WebSocket) | [아키텍처](docs/architecture.md) |
 
-별도 부하 테스트는 하지 않았고, 검증하면서 잰 지연 값만 [검증](docs/verification.md)에 정리했다. 과제 항목 밖으로는 앱 여러 대 + nginx 구성과 노드 장애·일시 정지 시나리오를 만들었다.
+별도 부하 테스트는 하지 않았다. 테스트 전략과 자동화하지 않은 항목은 [테스트](docs/testing.md)에 정리했다. 과제 항목 밖으로는 앱 여러 대 + nginx 구성과 노드 장애·일시 정지 시나리오를 만들었다.
 
 ## 빠른 시작
 
 ### 준비물
 
-- Docker Desktop 또는 Docker Engine(Compose v2.24 이상). 앱 이미지는 컨테이너 안에서 빌드하므로 JDK는 없어도 된다.
+- Docker Desktop 또는 Docker Engine(Compose v2.24 이상). 앱 이미지는 컨테이너 안에서 빌드하므로 실행만 할 때는 JDK가 없어도 된다. 테스트를 돌리려면 JDK 21이 필요하다.
 - 8080, 8081, 5432, 6379, 9094 포트가 비어 있어야 한다. 모두 `127.0.0.1`에만 연다. 클러스터 구성은 8000, 관측 구성은 3000·4318도 쓴다.
-- 검증 스크립트를 돌리려면 Python 3.10 이상이 필요하다. 로컬에서 직접 빌드하려면 JDK 21이 필요하다.
+- 테스트 스크립트는 Bash와 저장소의 Gradle Wrapper를 사용한다. Windows에서는 Git Bash에서 실행한다.
 
 ### 실행
 
@@ -132,14 +132,7 @@ curl -s -X POST http://127.0.0.1:8080/auth/login \
   -d '{"username":"insurance.user","password":"chat1234!"}'
 ```
 
-세션 생성부터 참여, 메시지, 시점 복원까지 한 번에 보려면 검증 스크립트 하나를 돌려 보는 것이 가장 빠르다.
-
-```bash
-cd scripts/verify
-python -m venv .venv
-.venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\pip
-.venv/bin/python p6_restore.py core            # Windows: .venv\Scripts\python
-```
+테스트 실행 방법은 [테스트 문서](docs/testing.md)를 참고한다.
 
 ### 중지와 초기화
 
@@ -157,37 +150,12 @@ docker compose down -v     # 볼륨까지 삭제. 다음 기동 때 DB와 시드
 | [정합성과 상태 복원](docs/consistency-and-restore.md) | 순서 기준, 멱등, 재연결, presence, 리플레이·스냅샷, 비동기 파이프라인 |
 | [운영과 장애 대응](docs/operations.md) | 관측, 장애 3종의 감지 → 완화 → 복구, 수평 확장, 설정 기본값 |
 | [API](docs/api.md) | REST·STOMP 계약, 오류 코드, 클라이언트가 지켜야 할 규칙 |
-| [검증](docs/verification.md) | 검증 방식, 요구사항별 결과, 장애 주입, 측정한 지연 |
+| [테스트](docs/testing.md) | 테스트 묶음, 실행 방법, 장애 주입, 자동화하지 않은 항목 |
 | [확장 설계(미구현)](docs/design/) | 실시간 전달 수평 확장, 긴 메시지, 로그 수집 확장 |
 
-## 검증 스크립트
+## 테스트
 
-이 프로젝트에서 틀리기 쉬운 곳은 노드 사이, 재연결, 장애 상황이다. 그래서 단위 테스트보다 실제로 띄운 서버에 HTTP·STOMP로 요청을 보내 확인하는 스크립트에 공을 들였다. 구현 단계마다 새로 클론한 저장소와 빈 볼륨에서 돌렸고, 실패가 하나라도 있으면 종료 코드 1로 끝난다. 파일 이름의 번호는 구현한 순서다.
-
-| 스크립트 | 확인하는 것 | 필요한 구성 |
-|---|---|---|
-| `p1_auth.py` | 로그인, 토큰 갱신·재사용 탐지, 오류 형식 | 기본 |
-| `p2_session.py`, `p2_list.py` | 세션 상태 머신, 멱등, 목록 필터·페이지 | 기본 |
-| `p3_events.py` | 이벤트 수집, 중복·순서, typing·읽음 커서 억제 | 기본 |
-| `p4_realtime.py` | 실시간 송수신, 구독 규칙, resume, 토큰 만료 | 기본 |
-| `p5_presence.py` | DISCONNECT·RECONNECT 기록, 유예, 늦게 온 신호 | 기본 |
-| `p6_restore.py` | 시점 복원, 스냅샷 경로 비교, DLT | 기본 |
-| `p7_cluster.py` | 노드 간 전달, 노드 강제 종료, 일시 정지 | 클러스터 |
-| `p7_trace.py` | 노드를 넘는 분산 추적 | 클러스터 + 관측 |
-
-아래 명령은 `scripts/verify`에서 가상환경을 만든 뒤(빠른 시작 참고) 실행한다. 인자 없이 돌리면 기본 단계만 실행한다(p4는 `core,resume`, p5는 `core,stale`, p6은 `core,dlt`, p7은 `cross`). 컨테이너를 멈추거나 재시작하는 단계는 쉼표로 이름을 넘길 때만 돌고, 중간에 실패해도 멈춘 컨테이너는 다시 띄운다.
-
-```bash
-.venv/bin/python p4_realtime.py core,resume,redis,drain   # redis: Redis 재시작·일시 정지, drain: 앱 종료 후 다시 띄움
-.venv/bin/python p5_presence.py core,stale,redis          # redis: Redis 재시작
-.venv/bin/python p6_restore.py core,dlt,kafka             # kafka: Kafka 중단
-.venv/bin/python p7_cluster.py cross,kill,pause           # kill: 앱 강제 종료, pause: 앱 일시 정지
-```
-
-- 스크립트는 DB·Kafka 상태를 볼 때 `docker exec`를 쓰므로 docker CLI가 있는 곳에서 돌린다. DB 계정과 DB 이름은 `.env.example`의 기본값(`chat_owner`, `chat`)을, 컨테이너 이름은 compose 프로젝트 이름 `event-based-chat`을 가정한다(`COMPOSE_PROJECT`로 바꿀 수 있다). 만료 토큰을 만들 때는 환경 변수 `JWT_SECRET`, 없으면 저장소 루트 `.env`의 값을 읽는다.
-- `p5_presence.py`의 `stale` 단계는 presence 대조 작업(기본 60초 주기)을 기다린다. 앱을 `CHAT_PRESENCE_RECONCILE_INTERVAL=5s docker compose up -d`로 띄우면 빨리 끝나고, `redis` 단계에서 Redis 재시작 직후의 대조 동작도 함께 확인된다. Windows PowerShell에서는 `.env`에 `CHAT_PRESENCE_RECONCILE_INTERVAL=5s`를 한 줄 넣고 띄운다.
-
-검증 방식과 결과는 [검증](docs/verification.md)에 정리했다.
+단위 테스트는 Docker 없이 실행한다. 통합 테스트는 Testcontainers로 의존 서비스를 띄우며, 클러스터 테스트는 Compose 환경에서 앱 여러 대와 nginx를 대상으로 한다. 실행 명령과 각 테스트의 범위는 [테스트 문서](docs/testing.md)를 참고한다.
 
 ## 다른 실행 구성
 
@@ -239,6 +207,6 @@ chat-domain/            순수 도메인: 상태 머신 판정(SessionDecider), 
 chat-persistence/       JPA 엔티티, 저장소(QueryDSL), Flyway 마이그레이션, 시드
 chat-api/               Spring Boot 앱: REST, STOMP, 실시간 중계, presence, 복원, 비동기 작업자
 docker/                 PostgreSQL 초기화, Redis 설정, nginx, Grafana 프로비저닝
-scripts/verify/         검증 스크립트
+scripts/test/           단위·통합·클러스터 테스트 Bash 러너
 docs/                   설계·운영 문서
 ```
