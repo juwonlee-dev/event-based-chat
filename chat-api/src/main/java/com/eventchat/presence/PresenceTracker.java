@@ -153,8 +153,11 @@ public class PresenceTracker implements SmartLifecycle {
         Map<UUID, List<PresenceRow>> byUser = participants.findActivePresence(SessionStatus.IN_PROGRESS).stream()
                 .collect(Collectors.groupingBy(PresenceRow::userId, LinkedHashMap::new, Collectors.toList()));
         List<UUID> users = List.copyOf(byUser.keySet());
+        // 재등록은 lease 갱신 주기(heartbeat)마다 일어나므로, lease 두 배면 모든 노드가 다시 등록한 뒤다.
+        String settleMicros = Long.toString(properties.nodeLeaseTtl().multipliedBy(2).toNanos() / 1000);
         for (int from = 0; from < users.size(); from += RECONCILE_BATCH) {
             List<String> args = new ArrayList<>();
+            args.add(settleMicros);
             for (UUID userId : users.subList(from, Math.min(users.size(), from + RECONCILE_BATCH))) {
                 List<PresenceRow> rows = byUser.get(userId);
                 Set<PresenceStatus> states = rows.stream().map(PresenceRow::presence).collect(Collectors.toSet());

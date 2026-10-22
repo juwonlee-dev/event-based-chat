@@ -7,6 +7,7 @@
 --   ws:conn:{user}      HASH   connId → nodeId
 --   pr:{user}           HASH   state, ver, since, lastSeen, reason
 --   pr:grace            ZSET   userId → 유예 만료 시각(μs)
+--   pr:epoch            STRING 이 Redis 인스턴스에 처음 등록한 시각(μs). 재시작하면 사라진다
 --
 -- 시각은 Redis TIME(μs)이다. ver = max(지금, 이전 ver + 1)이라 동률이나 시계 역행에도 단조 증가한다.
 -- 결과는 전이마다 5칸(userId, 종류, ver, a, b)을 이어 붙인 평면 배열이다.
@@ -91,6 +92,7 @@ elseif op == 'register' then
   local node, grace_us, now = ARGV[2], tonumber(ARGV[4]), now_us()
   redis.call('SET', 'ws:node:' .. node, '1', 'PX', ARGV[3])
   redis.call('SADD', 'ws:nodes', node)
+  redis.call('SET', 'pr:epoch', fmt(now), 'NX')
   local live = {}
   for i = 5, #ARGV do
     live[ARGV[i]] = true
@@ -133,10 +135,16 @@ elseif op == 'sweep' then
   end
 
 elseif op == 'reconcile' then
-  -- (userId, DB 상태 ONLINE|OFFLINE|MIXED, DB의 최대 presence_ver)...
+  -- 보류 시간(μs), (userId, DB 상태 ONLINE|OFFLINE|MIXED, DB의 최대 presence_ver)...
   -- 유예 중이 아닌 사용자의 실제 상태(연결 수)를 DB와 비교해, 다르면 그 상태와 DB보다 큰 ver를 돌려준다.
+  -- Redis가 재시작해 연결 기록이 비었으면 모든 노드가 재등록할 때까지(첫 등록 뒤 보류 시간) 판정하지 않는다.
+  -- 그 전에 판정하면 아직 재등록하지 않은 노드의 사용자가 거짓 OFFLINE으로 기록된다.
   local now = now_us()
-  for i = 2, #ARGV, 3 do
+  local epoch = redis.call('GET', 'pr:epoch')
+  if not epoch or now - tonumber(epoch) < tonumber(ARGV[2]) then
+    return out
+  end
+  for i = 3, #ARGV, 3 do
     local user, db, db_ver = ARGV[i], ARGV[i + 1], tonumber(ARGV[i + 2])
     if not redis.call('ZSCORE', 'pr:grace', user) then
       local pr = 'pr:' .. user
