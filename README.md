@@ -61,7 +61,7 @@
 | 테스트 전략 고도화 | 노드 강제 종료, Redis·Kafka 장애를 포함한 JUnit 테스트와 Bash 러너 | [테스트](docs/testing.md) |
 | 추가 통신 방식 비교 | WebSocket, SSE, 롱폴링, WebRTC를 비교했다(구현은 WebSocket) | [아키텍처](docs/architecture.md) |
 
-별도 부하 테스트는 하지 않았다. 테스트 전략과 자동화하지 않은 항목은 [테스트](docs/testing.md)에 정리했다. 과제 항목 밖으로는 앱 여러 대 + nginx 구성과 노드 장애·일시 정지 시나리오를 만들었다.
+별도 부하 테스트는 하지 않았다. 테스트 전략은 [테스트](docs/testing.md)에 정리했다. 과제 항목 밖으로는 앱 여러 대 + nginx 구성과 노드 장애·일시 정지 시나리오를 만들었다.
 
 ## 빠른 시작
 
@@ -150,7 +150,7 @@ docker compose down -v     # 볼륨까지 삭제. 다음 기동 때 DB와 시드
 | [정합성과 상태 복원](docs/consistency-and-restore.md) | 순서 기준, 멱등, 재연결, presence, 리플레이·스냅샷, 비동기 파이프라인 |
 | [운영과 장애 대응](docs/operations.md) | 관측, 장애 3종의 감지 → 완화 → 복구, 수평 확장, 설정 기본값 |
 | [API](docs/api.md) | REST·STOMP 계약, 오류 코드, 클라이언트가 지켜야 할 규칙 |
-| [테스트](docs/testing.md) | 테스트 묶음, 실행 방법, 장애 주입, 자동화하지 않은 항목 |
+| [테스트](docs/testing.md) | 테스트 묶음, 실행 방법, 장애 주입 |
 | [확장 설계(미구현)](docs/design/) | 실시간 전달 수평 확장, 긴 메시지, 로그 수집 확장 |
 
 ## 테스트
