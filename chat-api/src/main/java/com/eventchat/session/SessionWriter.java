@@ -195,7 +195,10 @@ public class SessionWriter {
                         events.findBySessionIdAndActorIdAndClientEventId(sessionId, actorId, idempotencyKey);
                 if (previous.isPresent()) {
                     checkSameRequest(previous.get(), requestHash);
-                    committed(sessionId, List.of(previous.get()));
+                    // 처음 쓰기가 커밋 뒤 발행 전에 끊겼을 수 있다. 키가 붙은 이벤트만이 아니라 그 쓰기의 묶음 전체를
+                    // 다시 내보내야 상대가 뒤따르는 상태 전이(SESSION_STATUS_CHANGED)까지 받는다.
+                    committed(sessionId, events.findBySessionIdAndServerTsAndSeqGreaterThanEqualOrderBySeq(
+                            sessionId, previous.get().getServerTs(), previous.get().getSeq()));
                     return new Outcome(session, current, Result.REPLAYED, List.of(previous.get()));
                 }
             }
