@@ -3,11 +3,13 @@ package com.eventchat.web.error;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -31,9 +33,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return response.body(problem);
     }
 
-    /** 세션 행 잠금을 lock_timeout 안에 얻지 못했다. 같은 멱등 키로 다시 보내면 된다. */
-    @ExceptionHandler(PessimisticLockingFailureException.class)
-    ResponseEntity<ProblemDetail> handleLockTimeout(PessimisticLockingFailureException e) {
+    /**
+     * 다시 보내면 성공할 수 있는 DB 오류: 잠금 대기(lock_timeout)·문장 시간 초과, 커넥션 획득 실패.
+     * 같은 멱등 키로 다시 보내면 된다.
+     */
+    @ExceptionHandler({TransientDataAccessException.class, DataAccessResourceFailureException.class,
+            CannotCreateTransactionException.class})
+    ResponseEntity<ProblemDetail> handleTransientDbFailure(Exception e) {
         return handleApiException(ApiException.unavailable(Duration.ofSeconds(1)));
     }
 

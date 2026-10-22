@@ -14,7 +14,6 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.converter.MessageConversionException;
@@ -65,7 +64,7 @@ public class StompEventController {
             error.put("status", api.getCode().status().value());
             error.put("code", api.getCode().name());
             error.putAll(api.getProperties());
-        } else if (e instanceof PessimisticLockingFailureException) {
+        } else if (ApiException.isTransientDbFailure(e)) {
             error.put("status", ErrorCode.TEMPORARILY_UNAVAILABLE.status().value());
             error.put("code", ErrorCode.TEMPORARILY_UNAVAILABLE.name());
             error.put("retryAfterMs", LOCK_RETRY_AFTER.toMillis());

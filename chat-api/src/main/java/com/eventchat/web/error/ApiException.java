@@ -4,6 +4,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import lombok.Getter;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.TransientDataAccessException;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 @Getter
 public class ApiException extends RuntimeException {
@@ -32,6 +35,16 @@ public class ApiException extends RuntimeException {
     public static ApiException rateLimited(Duration retryAfter) {
         return new ApiException(ErrorCode.RATE_LIMITED, "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
                 Map.of("retryAfterMs", retryAfter.toMillis()), retryAfter);
+    }
+
+    /**
+     * 다시 보내면 성공할 수 있는 DB 오류인가. 잠금·문장 시간 초과(TransientDataAccessException),
+     * 커넥션 획득 실패(트랜잭션 시작 실패, DataAccessResourceFailureException)는 503으로 돌려준다.
+     */
+    public static boolean isTransientDbFailure(Throwable e) {
+        return e instanceof TransientDataAccessException
+                || e instanceof DataAccessResourceFailureException
+                || e instanceof CannotCreateTransactionException;
     }
 
     public static ApiException unavailable(Duration retryAfter) {
