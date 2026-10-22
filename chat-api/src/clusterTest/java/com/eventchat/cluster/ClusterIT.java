@@ -249,4 +249,22 @@ class ClusterIT {
         assertThat(after.subList(before, after.size())).extracting(e -> e.get("type").asString())
                 .doesNotContain("DISCONNECT");
     }
+
+    @Test
+    @Order(5)
+    @Tag("fault")
+    @DisplayName("인스턴스를 정상 종료하면 연결을 1012(서비스 재시작)로 닫아 클라이언트가 다시 붙게 한다")
+    void gracefulShutdownDrains() throws Exception {
+        String victim = nodes.get(ip(a));
+        Thread stopping = Thread.ofVirtual().start(() -> Docker.run("stop", "-t", "45", victim));
+        restore.add("start " + victim);
+        try {
+            assertThat(a.awaitClosed(Duration.ofSeconds(20))).isTrue();
+            assertThat(a.closeCode()).isEqualTo(1012);
+        } finally {
+            stopping.join(Duration.ofSeconds(60));
+            Docker.run("start", victim);
+            restore.remove("start " + victim);
+        }
+    }
 }
