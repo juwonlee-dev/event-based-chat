@@ -112,6 +112,9 @@ services:
       # obs 프로필(lgtm)을 켤 때 true로 둔다. false면 추적·지표를 만들기만 하고 내보내지 않는다.
       OTEL_ENABLED: ${OTEL_ENABLED:-false}
       OTEL_ENDPOINT: http://lgtm:4318
+      # 검증용: presence 대조 주기(기본 60s). 줄이면 p5의 stale 단계가 빨리 끝나고, redis 단계에서
+      # Redis 재시작 직후의 대조 동작까지 확인된다.
+      CHAT_PRESENCE_RECONCILE_INTERVAL: ${CHAT_PRESENCE_RECONCILE_INTERVAL:-60s}
       SPRING_PROFILES_ACTIVE: local
     depends_on:
       postgres:
