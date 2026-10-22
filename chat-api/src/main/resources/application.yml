@@ -11,7 +11,8 @@ spring:
     username: ${DB_APP_USER:chat_app}
     password: ${DB_APP_PASSWORD}
     hikari:
-      maximum-pool-size: 10
+      # 쓰기 6 + 읽기 3 + resume 3 + 백그라운드 작업 몫(relay, 스냅샷 작업자, presence 대조) 3 이상. 기동 시 검사한다.
+      maximum-pool-size: 16
       connection-timeout: 1500
   flyway:
     user: ${DB_OWNER_USER:chat_owner}
