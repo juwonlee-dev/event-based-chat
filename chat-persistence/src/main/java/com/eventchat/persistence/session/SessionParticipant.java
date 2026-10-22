@@ -111,6 +111,7 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
         this.leftSeq = seq;
         this.leftAt = at;
         this.active = false;
+        stopTyping();
     }
 
     public void startTyping(long seq, Instant at) {
@@ -141,8 +142,10 @@ public class SessionParticipant extends AssignedIdEntity<SessionParticipant.Key>
         this.presenceVer = ver;
     }
 
+    /** 종단 전이: 리듀서와 같이 입력 중 상태도 끈다. */
     public void deactivate() {
         this.active = false;
+        stopTyping();
     }
 
     @Override
