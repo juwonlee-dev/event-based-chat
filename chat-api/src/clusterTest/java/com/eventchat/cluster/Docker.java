@@ -38,7 +38,7 @@ final class Docker {
         Map<String, String> byIp = new LinkedHashMap<>();
         String names = run("ps", "--filter", "label=com.docker.compose.project=" + project,
                 "--filter", "label=com.docker.compose.service=app", "--format", "{{.Names}}");
-        for (String name : names.split("\s+")) {
+        for (String name : names.split("\\s+")) {
             if (!name.isBlank()) {
                 byIp.put(run("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", name), name);
             }
