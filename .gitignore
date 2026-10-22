@@ -52,3 +52,6 @@ desktop.ini
 # 검증 스크립트 실행 환경
 .venv/
 __pycache__/
+
+# 로컬 MCP 설정(접근 토큰 포함)
+.mcp.json
