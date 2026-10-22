@@ -1,17 +1,21 @@
 package com.eventchat.stomp;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.stream.Collectors;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessageType;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.messaging.simp.broker.OrderedMessageChannelDecorator;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.simp.user.SimpUserRegistry;
@@ -30,6 +34,8 @@ import tools.jackson.databind.json.JsonMapper;
  */
 @Component
 public class StompDelivery {
+
+    private static final Log log = LogFactory.getLog(StompDelivery.class);
 
     private final SimpMessagingTemplate messagingTemplate;
     private final MessageChannel clientOutboundChannel;
@@ -62,15 +68,22 @@ public class StompDelivery {
         toTopic(sessionId, json(payload));
     }
 
-    /** 한 구독에만 보낸다. 같은 세션의 다른 구독자에게는 가지 않는다. */
-    public void toSubscription(String simpSessionId, String subscriptionId, UUID sessionId, byte[] json) {
-        SimpMessageHeaderAccessor accessor = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
-        accessor.setSessionId(simpSessionId);
-        accessor.setSubscriptionId(subscriptionId);
-        accessor.setDestination(StompDestinations.sessionTopic(sessionId));
-        accessor.setContentType(MimeTypeUtils.APPLICATION_JSON);
-        accessor.setLeaveMutable(true);
-        clientOutboundChannel.send(MessageBuilder.createMessage(json, accessor.getMessageHeaders()));
+    /**
+     * 한 구독에만 보낸다. 같은 세션의 다른 구독자에게는 가지 않는다.
+     * clientOutboundChannel은 스레드 풀이라 그냥 보내면 같은 연결에서도 순서가 바뀔 수 있다.
+     * 묶음을 브로커와 같은 순서 보장 장치로 하나씩 내보낸다(resume 이벤트 → RESUMED 순서).
+     */
+    public void toSubscription(String simpSessionId, String subscriptionId, UUID sessionId, List<byte[]> frames) {
+        MessageChannel ordered = new OrderedMessageChannelDecorator(clientOutboundChannel, log);
+        for (byte[] json : frames) {
+            SimpMessageHeaderAccessor accessor = SimpMessageHeaderAccessor.create(SimpMessageType.MESSAGE);
+            accessor.setSessionId(simpSessionId);
+            accessor.setSubscriptionId(subscriptionId);
+            accessor.setDestination(StompDestinations.sessionTopic(sessionId));
+            accessor.setContentType(MimeTypeUtils.APPLICATION_JSON);
+            accessor.setLeaveMutable(true);
+            ordered.send(MessageBuilder.createMessage(json, accessor.getMessageHeaders()));
+        }
     }
 
     /** /user/{user}{queue} 중 simpSessionId 연결에만 보낸다(broadcast=false와 같다). */

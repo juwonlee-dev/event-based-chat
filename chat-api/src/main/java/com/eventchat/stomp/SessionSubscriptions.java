@@ -100,14 +100,13 @@ public class SessionSubscriptions {
                 }
                 frames.add(json);
             }
-            frames.forEach(json -> delivery.toSubscription(simpSessionId, subscriptionId, sessionId, json));
-
             Map<String, Object> resumed = new LinkedHashMap<>();
             resumed.put("kind", "RESUMED");
             resumed.put("sessionId", sessionId);
             resumed.put("fromSeq", afterSeq + 1);
             resumed.put("toSeq", rows.isEmpty() ? afterSeq : rows.getLast().seq());
-            delivery.toSubscription(simpSessionId, subscriptionId, sessionId, delivery.json(resumed));
+            frames.add(delivery.json(resumed));
+            delivery.toSubscription(simpSessionId, subscriptionId, sessionId, frames);
             meters.counter("chat.realtime.resume", "result", "resumed").increment();
         } finally {
             resumePermits.release();
@@ -119,7 +118,7 @@ public class SessionSubscriptions {
         resync.put("kind", "SYSTEM_RESYNC");
         resync.put("sessionId", sessionId);
         resync.put("fromSeq", afterSeq + 1);
-        delivery.toSubscription(simpSessionId, subscriptionId, sessionId, delivery.json(resync));
+        delivery.toSubscription(simpSessionId, subscriptionId, sessionId, List.of(delivery.json(resync)));
         meters.counter("chat.realtime.resume", "result", "resync").increment();
     }
 
