@@ -68,7 +68,7 @@ HTTP 요청과 내부 서비스 호출은 한 trace로 이어진다. Kafka produ
 
 **감지.** `chat-hikari-pending`은 `hikaricp_connections_pending > 0`이 30초 지속될 때, 이벤트 p99는 500ms 초과가 5분 지속될 때 알린다. 앱 로그의 DB 연결 예외와 `pg_stat_activity`의 대기·`idle in transaction`을 함께 보고, 커넥션 수 고갈인지 세션 행 잠금 경합인지 분리한다.
 
-**완화.** 풀 대기는 최대 1500ms 뒤 실패하고, 쓰기 허용량 6·읽기 허용량 3·resume 3의 노드 상한이 과도한 DB 동시 요청을 줄인다. 앱 DB 계정에는 역할 단위 타임아웃 세 가지를 걸었다. `lock_timeout` 1초는 세션 행 잠금을 오래 기다리지 않게 하고, `statement_timeout` 3초는 느린 쿼리가 커넥션을 붙잡지 않게 하며, `idle_in_transaction_session_timeout` 10초는 열어 둔 채 방치된 트랜잭션을 끊는다. 허용량 초과와 잠금 대기 초과는 `503`과 `Retry-After`로 응답하지만, 커넥션 획득 실패와 문장 제한 초과는 현재 `500`으로 나간다. 운영자는 `pg_locks`와 `pg_stat_activity`로 `chat_session` 행을 기다리는 세션과 오래 걸린 트랜잭션을 찾아 원인을 끊고, 5xx가 이어지면 호출 측 재시도 간격을 늘린다.
+**완화.** 풀 대기는 최대 1500ms 뒤 실패하고, 쓰기 허용량 6·읽기 허용량 3·resume 3의 노드 상한이 과도한 DB 동시 요청을 줄인다. 앱 DB 계정에는 역할 단위 타임아웃 세 가지를 걸었다. `lock_timeout` 1초는 세션 행 잠금을 오래 기다리지 않게 하고, `statement_timeout` 3초는 느린 쿼리가 커넥션을 붙잡지 않게 하며, `idle_in_transaction_session_timeout` 10초는 열어 둔 채 방치된 트랜잭션을 끊는다. 허용량 초과, 잠금 대기 초과, 문장 제한 초과, 커넥션 획득 실패는 모두 `503 TEMPORARILY_UNAVAILABLE`과 `Retry-After`로 응답한다(STOMP는 receipts의 같은 코드). 클라이언트가 일시 장애와 버그(`500`)를 구분해 같은 멱등 키로 다시 보낼 수 있게 하려는 것이다. 운영자는 `pg_locks`와 `pg_stat_activity`로 `chat_session` 행을 기다리는 세션과 오래 걸린 트랜잭션을 찾아 원인을 끊고, 5xx가 이어지면 호출 측 재시도 간격을 늘린다.
 
 **복구.** readiness는 DB 상태를 반영하지 않으므로 회복 여부는 `hikaricp_connections_pending`, 5xx 비율, 이벤트 수집 p99가 정상으로 돌아왔는지로 확인한다. 이벤트 쓰기는 한 트랜잭션이므로 실패한 요청은 같은 멱등 키로 다시 시도할 수 있다. 같은 키 재전송이 한 번만 반영되는 것은 `EventIngestIT`와 `SessionLifecycleIT`가 확인한다. DB를 실제로 멈추는 장애 주입 테스트는 아직 없다. SQL별 실행 계획이나 복구 명령은 운영 환경의 DB 배포 방식에 따라 달라 이 문서에서 임의 명령을 고정하지 않는다.
 
