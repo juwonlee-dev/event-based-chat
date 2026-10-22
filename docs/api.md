@@ -82,25 +82,109 @@ Content-Type: application/json
 메시지 저장은 `201`, 같은 `clientEventId` 재전송은 최초 이벤트와 함께 `200`이다. `EventView`에서는 DB의 별도 `content` 열이 응답의 `payload.content`로 합쳐진다.
 
 ```json
-{"seq":3,"eventId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e003","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","type":"MESSAGE","actorId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e002","clientEventId":"web-17","serverTime":"2026-10-22T10:01:00Z","msgNo":1,"payload":{"content":"계약 내용을 확인하겠습니다."}}
+{"seq":5,"eventId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e003","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","type":"MESSAGE","actorId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e002","clientEventId":"web-17","serverTime":"2026-10-22T10:01:00Z","msgNo":1,"payload":{"content":"계약 내용을 확인하겠습니다."}}
 ```
 
 ### 시점 복원
 
 ```http
-GET /sessions/7c90a160-2b2d-7a7f-8a6c-7a257c64e001/timeline?at=2026-10-22T10:01:00Z&itemLimit=50
+GET /sessions/7c90a160-2b2d-7a7f-8a6c-7a257c64e001/timeline?at=2026-10-22T10:01:00Z&itemLimit=1
 Authorization: Bearer <accessToken>
 ```
 
-복원 응답은 세션, 기준 시점, 복원 출처, 참여자 상태, 화면 이벤트를 반환한다. 항목이 많으면 응답의 `nextBeforeSeq`를 다음 요청의 `beforeSeq`로 전달한다.
+생성(seq 1)·생성자 참여(2)·고객 참여(3)·진행 전이(4)·메시지(5)가 있는 세션을 seq 5 시점으로 복원한 예다. 응답은 세션, 기준 시점, 복원 출처, 참여자 상태, 화면 이벤트를 반환한다. 예시를 짧게 하려고 `itemLimit=1`로 최신 항목 하나만 받았다. `unreadCount`는 그 시점의 메시지 수에서 각자 마지막으로 읽은 메시지 번호를 뺀 값이다. 항목이 많으면 응답의 `nextBeforeSeq`를 다음 요청의 `beforeSeq`로 전달한다.
 
 ```json
 {
-  "session":{"id":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","title":"보험 계약 상담","category":"INSURANCE","status":"WAITING","createdAt":"2026-10-22T10:00:00Z","startedAt":null,"endedAt":null,"lastSeq":3,"lastEventAt":"2026-10-22T10:01:00Z"},
-  "asOf":{"requestedAt":"2026-10-22T10:01:00Z","seq":3,"referenceTime":"2026-10-22T10:01:00Z","status":"WAITING","messageCount":1},
-  "restoredFrom":{"mode":"SNAPSHOT_INCREMENTAL","snapshotSeq":2,"replayedEvents":1,"stateHash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-  "participants":[{"userId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e002","displayName":"보험 상담원","role":"USER","category":"INSURANCE","state":"JOINED","joinedAt":"2026-10-22T10:00:00Z","leftAt":null,"presence":{"status":"OFFLINE","since":null},"typing":{"active":false,"expiresAt":null},"readCursor":{"seq":0,"at":null},"unreadCount":1}],
-  "items":{"list":[{"seq":3,"eventId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e003","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","type":"MESSAGE","actorId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e002","clientEventId":"web-17","serverTime":"2026-10-22T10:01:00Z","msgNo":1,"payload":{"content":"계약 내용을 확인하겠습니다."}}],"hasMore":false,"nextBeforeSeq":3}
+  "session": {
+    "id": "7c90a160-2b2d-7a7f-8a6c-7a257c64e001",
+    "title": "보험 계약 상담",
+    "category": "INSURANCE",
+    "status": "IN_PROGRESS",
+    "createdAt": "2026-10-22T10:00:00Z",
+    "startedAt": "2026-10-22T10:00:30Z",
+    "endedAt": null,
+    "lastSeq": 5,
+    "lastEventAt": "2026-10-22T10:01:00Z"
+  },
+  "asOf": {
+    "requestedAt": "2026-10-22T10:01:00Z",
+    "seq": 5,
+    "referenceTime": "2026-10-22T10:01:00Z",
+    "status": "IN_PROGRESS",
+    "messageCount": 1
+  },
+  "restoredFrom": {
+    "mode": "FULL_REPLAY",
+    "snapshotSeq": null,
+    "replayedEvents": 5,
+    "stateHash": "<SHA-256 hex>"
+  },
+  "participants": [
+    {
+      "userId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e002",
+      "displayName": "보험 상담원",
+      "role": "USER",
+      "category": "INSURANCE",
+      "state": "JOINED",
+      "joinedAt": "2026-10-22T10:00:00Z",
+      "leftAt": null,
+      "presence": {
+        "status": "ONLINE",
+        "since": "2026-10-22T10:00:05Z"
+      },
+      "typing": {
+        "active": false,
+        "expiresAt": null
+      },
+      "readCursor": {
+        "seq": 0,
+        "at": null
+      },
+      "unreadCount": 1
+    },
+    {
+      "userId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e004",
+      "displayName": "보험 고객",
+      "role": "CUSTOMER",
+      "category": "INSURANCE",
+      "state": "JOINED",
+      "joinedAt": "2026-10-22T10:00:30Z",
+      "leftAt": null,
+      "presence": {
+        "status": "ONLINE",
+        "since": "2026-10-22T10:00:31Z"
+      },
+      "typing": {
+        "active": false,
+        "expiresAt": null
+      },
+      "readCursor": {
+        "seq": 0,
+        "at": null
+      },
+      "unreadCount": 1
+    }
+  ],
+  "items": {
+    "list": [
+      {
+        "seq": 5,
+        "eventId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e003",
+        "sessionId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e001",
+        "type": "MESSAGE",
+        "actorId": "7c90a160-2b2d-7a7f-8a6c-7a257c64e002",
+        "clientEventId": "web-17",
+        "serverTime": "2026-10-22T10:01:00Z",
+        "msgNo": 1,
+        "payload": {
+          "content": "계약 내용을 확인하겠습니다."
+        }
+      }
+    ],
+    "hasMore": true,
+    "nextBeforeSeq": 5
+  }
 }
 ```
 
@@ -112,11 +196,11 @@ REST는 `Authorization: Bearer <accessToken>`을 사용한다. access token 기�
 
 | HTTP | 코드 예 |
 |---:|---|
-| 400 | `VALIDATION_FAILED`, `CURSOR_INVALID`, `MESSAGE_TOO_LONG`, `INVALID_TIME_FORMAT` |
-| 401 | `AUTH_INVALID`, `AUTH_TOKEN_EXPIRED`, `REFRESH_TOKEN_REUSED` |
-| 403 | `ACCESS_DENIED`, `NOT_PARTICIPANT`, `ADMIN_ONLY` |
+| 400 | `VALIDATION_FAILED`, `CURSOR_INVALID`, `MESSAGE_TOO_LONG`, `EVENT_TYPE_NOT_ALLOWED`, `INVALID_TIME_FORMAT`, `AT_IN_FUTURE` |
+| 401 | `AUTH_INVALID`, `AUTH_TOKEN_EXPIRED`, `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED` |
+| 403 | `ACCESS_DENIED`, `NOT_PARTICIPANT`, `PARTICIPANT_LEFT`, `ADMIN_READ_ONLY`, `ADMIN_ONLY` |
 | 404 | `SESSION_NOT_FOUND` |
-| 409 | `SESSION_NOT_JOINABLE`, `IDEMPOTENCY_KEY_REUSED` |
+| 409 | `SESSION_NOT_JOINABLE`, `ALREADY_JOINED`, `SESSION_NOT_STARTED`, `SESSION_NOT_ACTIVE`, `IDEMPOTENCY_KEY_REUSED` |
 | 422 | `BEFORE_SESSION_START`, `REPLAY_UNSUPPORTED` |
 | 429 | `RATE_LIMITED` |
 | 503 | `TEMPORARILY_UNAVAILABLE`, `RESTORE_TIMEOUT` |
@@ -148,7 +232,7 @@ ack:auto
 ^@
 ```
 
-세션 topic은 참여자만 구독할 수 있다. 복구가 필요 없으면 `resume-after-seq`를 생략한다. 연결 직후에는 `/user/queue/receipts`와 `/user/queue/system`도 구독해 거절·RESYNC 안내를 받는다.
+세션 topic은 참여자만 구독할 수 있다. 복구가 필요 없으면 `resume-after-seq`를 생략한다. 연결 직후에는 `/user/queue/receipts`(전송 결과, 구독 거절 `SUBSCRIBE_REJECTED`)와 `/user/queue/system`(Redis 중계 저하·회복 알림 `SYSTEM_DEGRADED`, `SYSTEM_RECOVERED`)도 구독한다.
 
 ### 3. 전송
 
@@ -165,7 +249,7 @@ content-type:application/json
 
 ### 4. Resume
 
-성공하면 놓친 이벤트 뒤에 `RESUMED` 프레임이 오며 `fromSeq`, `toSeq`를 포함한다. 클라이언트는 이미 적용한 seq 이하를 버린다. 최대 200개·256KB·노드 동시 3건을 넘기면 `/user/queue/system`으로 `SYSTEM_RESYNC`를 받고 REST 보충을 한다.
+성공하면 놓친 이벤트 뒤에 `RESUMED` 프레임이 오며 `fromSeq`, `toSeq`를 포함한다. 클라이언트는 이미 적용한 seq 이하를 버린다. 최대 200개·256KB·노드 동시 3건을 넘기면 이벤트 대신 같은 구독으로 `SYSTEM_RESYNC`(`fromSeq` 포함)를 받고 REST 보충을 한다.
 
 ```json
 {"kind":"RESUMED","sessionId":"7c90a160-2b2d-7a7f-8a6c-7a257c64e001","fromSeq":43,"toSeq":49}

@@ -261,22 +261,23 @@ INSERT INTO event_outbox (topic, key, payload, traceparent, created_at) VALUES (
 
 ### 2. 세션 목록
 
-`ChatSessionSearchRepositoryImpl`은 필터 조합에 따라 조건을 더하고 `created_at DESC, id DESC` 키셋 페이지를 읽는다.
+`ChatSessionSearchRepositoryImpl`은 요청에 들어온 필터만 WHERE 절에 붙이고 `created_at DESC, id DESC` 키셋 페이지를 읽는다. 아래는 모든 필터를 준 경우의 형태다.
 
 ```sql
 SELECT s.id, s.title, s.category, s.status, s.created_by, s.created_at,
        s.started_at, s.ended_at, s.end_reason, s.last_event_at, s.message_count
 FROM chat_session s
-WHERE (:created_from IS NULL OR s.created_at >= :created_from)
-  AND (:created_before IS NULL OR s.created_at < :created_before)
-  AND (:status_filter_empty OR s.status IN (:statuses))
-  AND (:category_filter_empty OR s.category IN (:categories))
-  AND (:title IS NULL OR lower(s.title) LIKE '%' || lower(:title) || '%')
-  AND (:participant_absent OR EXISTS (
-      SELECT 1 FROM session_participant p
-      WHERE p.session_id = s.id AND p.user_id = :participant_id AND p.left_seq IS NULL))
-  AND (:cursor_absent OR (s.created_at, s.id) < (:cursor_time, :cursor_id))
-ORDER BY s.created_at DESC, s.id DESC LIMIT :limit;
+WHERE s.created_at >= :created_from                      -- createdFrom
+  AND s.created_at < :created_before                     -- createdTo 다음 날 0시
+  AND s.status IN (:statuses)                            -- status
+  AND s.category IN (:categories)                        -- category
+  AND lower(s.title) LIKE '%' || lower(:title) || '%'    -- title
+  AND EXISTS (SELECT 1 FROM session_participant p        -- participant
+              WHERE p.session_id = s.id AND p.user_id = :participant_id AND p.left_seq IS NULL)
+  AND (s.created_at < :cursor_time                       -- cursor
+       OR (s.created_at = :cursor_time AND s.id < :cursor_id))
+ORDER BY s.created_at DESC, s.id DESC
+LIMIT :limit;
 ```
 
 전체·날짜 커서는 created 인덱스, WAITING은 WAITING 부분 인덱스, 분류는 category 선두 인덱스, 제목 부분 문자열은 GIN trigram이 후보가 된다. 여러 조건을 동시에 주면 한 인덱스만으로 정렬과 필터를 모두 해결하지 못할 수 있다. 참여자 `EXISTS`는 `session_participant_active_user_idx`의 부분 조건과 일치하지 않아 예상하지 말고 실행 계획을 확인해야 한다. 병목은 선택도가 낮은 다중 필터와 정렬이며, 개선은 실측 실행 계획과 대표 데이터 분포에 맞춘 복합 인덱스 또는 검색 전용 표현을 검토하는 순서다.

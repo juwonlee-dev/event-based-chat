@@ -35,19 +35,27 @@
 stateDiagram-v2
  [*] --> WAITING: SESSION_CREATED
  WAITING --> IN_PROGRESS: 두 번째 참여 JOIN
- WAITING --> SUSPENDED: 참여자 LEAVE / SESSION_STATUS_CHANGED
- IN_PROGRESS --> SUSPENDED: 참여자 LEAVE / SESSION_STATUS_CHANGED
- WAITING --> COMPLETED: 관리자 END
- IN_PROGRESS --> COMPLETED: 관리자 END
- SUSPENDED --> COMPLETED: 관리자 END
+ WAITING --> SUSPENDED: 생성자 LEAVE
+ IN_PROGRESS --> SUSPENDED: 참여자 LEAVE
+ IN_PROGRESS --> COMPLETED: 참여자 END
+ SUSPENDED --> [*]
+ COMPLETED --> [*]
 ```
+
+| 현재 \ 명령 | join(미참여자) | leave | end |
+|---|---|---|---|
+| `WAITING` | `IN_PROGRESS`로 전이 | 생성자가 나가면 `SUSPENDED` | `SESSION_NOT_STARTED` 거절 |
+| `IN_PROGRESS` | `SESSION_NOT_JOINABLE` 거절 | `SUSPENDED` | `COMPLETED` |
+| `SUSPENDED`, `COMPLETED`(종단) | `SESSION_NOT_JOINABLE` 거절 | `SESSION_NOT_ACTIVE` 거절 | `SESSION_NOT_ACTIVE` 거절 |
 
 | 입력 | 기록 이벤트 | 상태 반영 |
 |---|---|---|
-| 생성 | `SESSION_CREATED`, 초기 `JOIN` | `WAITING`, 생성자 참가 |
+| 생성 | `SESSION_CREATED`, 생성자 `JOIN` | `WAITING`, 생성자 참여 |
 | 두 번째 참여 | `JOIN`, `SESSION_STATUS_CHANGED` | `IN_PROGRESS` |
-| 나가기 | `LEAVE`, 필요 시 `SESSION_STATUS_CHANGED` | `SUSPENDED`, 참여자 비활성화 |
-| 관리자 종료 | `SESSION_STATUS_CHANGED` | `COMPLETED`, 참여자 비활성화 |
+| 나가기 | `LEAVE`, `SESSION_STATUS_CHANGED` | `SUSPENDED`, 참여자 비활성화 |
+| 참여자 종료 | `SESSION_STATUS_CHANGED` | `COMPLETED`, 참여자 비활성화 |
+
+참여자인지(`NOT_PARTICIPANT`, `PARTICIPANT_LEFT`)를 상태보다 먼저 확인한다. 관리자는 세션에 참여하지 않으므로 종료할 수도 없다.
 
 퇴장 후 재참여는 허용하지 않는다. 두 사람으로 고정된 상담 범위에서는 재입장·재할당 규칙보다 단순한 종단 처리가 명확하다. 이 선택은 그룹 채팅이나 상담원 교체 기능을 추가할 때 상태 전이와 참여 이력 모델을 확장해야 한다는 제약을 만든다.
 
